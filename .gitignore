@@ -49,3 +49,11 @@ htmlcov/
 # Windows
 Thumbs.db
 ehthumbs.db
+
+# Ignore large LSTM artifacts
+/lstm/
+
+# Ignore image and data artifacts
+*.png
+*.parquet
+/data/output/
