@@ -1,0 +1,51 @@
+pycache/
+.py[cod]
+.pyo
+.pyd
+.pytest_cache/
+venv/
+env/
+.venv/
+.ipynb_checkpoints/
+.ipynb/
+data/raw/
+data/cleaned/
+data/formatted/
+.DS_Store
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+htmlcov/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+.tox/
+.nox/
+
+# pyenv
+.python-version
+
+# IDEs
+.vscode/
+.idea/
+
+# Nextcloud sync (if you ever see a .sync/ folder)
+.sync/
+
+# macOS extras
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db

@@ -1,0 +1,114 @@
+name: Daily Forecast
+
+on:
+  schedule:
+    - cron: '0 9 * * 1-5'  # Run at 9 AM UTC, Monday to Friday
+  workflow_dispatch:  # Allow manual triggers
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Check requirements file
+      run: |
+        if [ ! -f requirements.txt ]; then
+          echo "Creating minimal requirements.txt"
+          cat > requirements.txt << EOF
+        pandas
+        numpy
+        tensorflow
+        scikit-learn
+        azure-storage-blob
+        pandas-market-calendars
+        python-dotenv
+        fredapi
+        pyarrow
+        EOF
+        fi
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+        
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install wheel setuptools
+        pip install -r requirements.txt
+        
+    - name: Verify imports
+      run: |
+        python -c "import pandas; import numpy; import tensorflow as tf; print('Core imports successful')"
+        python -c "import azure.storage.blob; import pandas_market_calendars; print('Azure and market calendar imports successful')"
+        
+    - name: Validate environment variables
+      run: |
+        if [ -z "$FRED_API_KEY" ]; then
+          echo "ERROR: FRED_API_KEY is not set"
+          exit 1
+        fi
+        if [ -z "$AZURE_STORAGE_CONNECTION_STRING" ]; then
+          echo "ERROR: AZURE_STORAGE_CONNECTION_STRING is not set"
+          exit 1
+        fi
+        echo "Environment variables validated"
+        
+    - name: Run daily forecast
+      env:
+        FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+        EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
+        NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+        PYTHONPATH: ${{ github.workspace }}
+        TF_CPP_MIN_LOG_LEVEL: '2'  # Reduce TensorFlow logging
+      run: |
+        python daily_forecast_blob.py
+      timeout-minutes: 30  # Add timeout protection
+      
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: forecast-logs-${{ github.run_number }}
+        path: |
+          *.log
+          /tmp/*.log
+        retention-days: 7
+        
+    - name: Upload logs on success
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: forecast-logs-success-${{ github.run_number }}
+        path: |
+          *.log
+        retention-days: 3
+        
+    - name: Notify on success
+      if: success()
+      run: echo "Daily forecast completed successfully"
+      
+    - name: Notify on failure  
+      if: failure()
+      run: echo "Daily forecast failed - check logs for details"

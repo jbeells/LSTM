@@ -1,0 +1,24 @@
+# Core dependencies
+pandas>=1.5.0
+numpy>=1.21.0
+tensorflow>=2.10.0
+scikit-learn>=1.0.0
+python-dotenv>=0.19.0
+
+# Financial data and market calendars
+fredapi>=0.4.3
+pandas-market-calendars>=4.0.0
+
+# Azure Blob Storage
+azure-storage-blob>=12.14.0
+pyarrow>=10.0.0
+
+# Email dependencies
+secure-smtplib>=0.1.1
+
+# Add the missing custom module (assuming it's in your repo)
+# If mkt_lstm is a local module, ensure it's in your repository
+# If it's a package, add it here with proper version
+statsmodels==0.14.0
+matplotlib==3.7.0
+
