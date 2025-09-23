@@ -60,6 +60,14 @@ jobs:
         python -c "import azure.storage.blob; import pandas_market_calendars; print('Azure and market calendar imports successful')"
 
     - name: Debug and validate environment variables
+      env:  # ← This was missing!
+        FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+        EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
+        NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
       run: |
         echo "=== Environment Variables Debug Check ==="
         echo "Timestamp: $(date)"
