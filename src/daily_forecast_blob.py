@@ -29,12 +29,12 @@ nyse = mcal.get_calendar('NYSE')
 
 # Azure Blob Storage configuration
 AZURE_CONTAINER_NAME = 'data'
-HISTORICAL_DATA_BLOB = 'historical_data.parquet'
-PREDICTED_DATA_BLOB = 'predicted_data.parquet'
+HISTORICAL_DATA_BLOB = 'data/historical_data.parquet'
+PREDICTED_DATA_BLOB = 'data/predicted_data.parquet'
 MODEL_BLOB = 'models/lstm_model.keras'
 SCALER_BLOB = 'models/scaler.pkl'
-METRICS_BLOB = 'metrics.parquet'
-HEALTH_CHECK_BLOB = 'health_check.json'
+METRICS_BLOB = 'data/metrics.parquet'
+HEALTH_CHECK_BLOB = 'data/health_check.json'
 
 # Email configuration
 NOTIFICATION_EMAIL = os.getenv('NOTIFICATION_EMAIL', 'admin@example.com')
