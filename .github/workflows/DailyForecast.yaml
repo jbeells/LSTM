@@ -58,19 +58,63 @@ jobs:
       run: |
         python -c "import pandas; import numpy; import tensorflow as tf; print('Core imports successful')"
         python -c "import azure.storage.blob; import pandas_market_calendars; print('Azure and market calendar imports successful')"
-        
-    - name: Validate environment variables
+
+    - name: Debug and validate environment variables
       run: |
-        if [ -z "$FRED_API_KEY" ]; then
-          echo "ERROR: FRED_API_KEY is not set"
-          exit 1
-        fi
-        if [ -z "$AZURE_STORAGE_CONNECTION_STRING" ]; then
-          echo "ERROR: AZURE_STORAGE_CONNECTION_STRING is not set"
-          exit 1
-        fi
-        echo "Environment variables validated"
+        echo "=== Environment Variables Debug Check ==="
+        echo "Timestamp: $(date)"
+        echo "Runner: ${{ runner.os }}"
+        echo "Repository: ${{ github.repository }}"
+        echo "Workflow: ${{ github.workflow }}"
+        echo ""
         
+        # Define required secrets
+        REQUIRED_SECRETS=(
+          "FRED_API_KEY"
+          "AZURE_STORAGE_CONNECTION_STRING" 
+          "EMAIL_USER"
+          "EMAIL_PASS"
+          "EMAIL_HOST"
+          "EMAIL_PORT"
+          "NOTIFICATION_EMAIL"
+        )
+        
+        # Track missing secrets
+        MISSING_SECRETS=()
+        PRESENT_SECRETS=()
+        
+        echo "=== Checking Required Secrets ==="
+        for secret in "${REQUIRED_SECRETS[@]}"; do
+          # Use indirect variable reference to check if secret is set
+          if [ -n "${!secret}" ]; then
+            echo "✅ $secret: PRESENT"
+            PRESENT_SECRETS+=("$secret")
+          else
+            echo "❌ $secret: MISSING"
+            MISSING_SECRETS+=("$secret")
+          fi
+        done
+        
+        echo ""
+        echo "=== Summary ==="
+        echo "Present secrets: ${#PRESENT_SECRETS[@]}"
+        echo "Missing secrets: ${#MISSING_SECRETS[@]}"
+        
+        if [ ${#MISSING_SECRETS[@]} -gt 0 ]; then
+          echo ""
+          echo "❌ MISSING SECRETS DETECTED:"
+          for missing in "${MISSING_SECRETS[@]}"; do
+            echo "   - $missing"
+          done
+          echo ""
+          echo "Please add the missing secrets to your repository:"
+          echo "Go to: Repository Settings → Secrets and variables → Actions → Repository secrets"
+          echo ""
+          exit 1
+        else
+          echo "✅ All required secrets are present!"
+        fi        
+
     - name: Run daily forecast
       env:
         FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
