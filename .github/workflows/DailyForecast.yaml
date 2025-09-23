@@ -135,7 +135,7 @@ jobs:
         PYTHONPATH: ${{ github.workspace }}
         TF_CPP_MIN_LOG_LEVEL: '2'  # Reduce TensorFlow logging
       run: |
-        python daily_forecast_blob.py
+        python src/daily_forecast_blob.py
       timeout-minutes: 30  # Add timeout protection
       
     - name: Upload logs on failure
