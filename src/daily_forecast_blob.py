@@ -20,7 +20,6 @@ import pickle
 import tensorflow as tf
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from azure.storage.blob import BlobServiceClient
-from mkt_lstm import update_fred_data, forecast_n_days
 import pandas_market_calendars as mcal
 from fredapi import Fred
 
