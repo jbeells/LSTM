@@ -21,4 +21,5 @@ secure-smtplib>=0.1.1
 # If it's a package, add it here with proper version
 statsmodels==0.14.0
 matplotlib==3.7.0
+scipy>=1.9.0,<1.11.0
 
