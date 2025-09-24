@@ -31,7 +31,6 @@ jobs:
         pandas-market-calendars
         python-dotenv
         fredapi
-        pyarrow
         EOF
         fi
         

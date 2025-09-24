@@ -29,12 +29,12 @@ nyse = mcal.get_calendar('NYSE')
 
 # Azure Blob Storage configuration
 AZURE_CONTAINER_NAME = 'data'
-HISTORICAL_DATA_BLOB = 'data/historical_data.parquet'
-PREDICTED_DATA_BLOB = 'data/predicted_data.parquet'
 MODEL_BLOB = 'models/lstm_model.keras'
 SCALER_BLOB = 'models/scaler.pkl'
-METRICS_BLOB = 'data/metrics.parquet'
 HEALTH_CHECK_BLOB = 'data/health_check.json'
+HISTORICAL_DATA_BLOB = 'data/historical_data.csv'
+PREDICTED_DATA_BLOB = 'data/predicted_data.csv'
+METRICS_BLOB = 'data/metrics.csv'
 
 # Email configuration
 NOTIFICATION_EMAIL = os.getenv('NOTIFICATION_EMAIL', 'jeells@me.com')
@@ -104,98 +104,89 @@ def send_notification(subject, message, is_error=False, logger=None):
         else:
             print(error_msg)
 
-def upload_to_blob(data, blob_name: str, file_format='parquet', logger=None):
+# Upload to blob (support CSV + JSON now)
+def upload_to_blob(data, blob_name: str, file_format='csv', logger=None):
     """Upload DataFrame or data to Azure Blob Storage."""
     try:
         blob_service_client = get_blob_service_client()
         blob_client = blob_service_client.get_blob_client(
-            container=AZURE_CONTAINER_NAME, 
+            container=AZURE_CONTAINER_NAME,
             blob=blob_name
         )
-        
-        # Convert to bytes
-        if file_format == 'parquet':
-            buffer = io.BytesIO()
-            data.to_parquet(buffer, index=False)
-            buffer.seek(0)
-            content = buffer.getvalue()
+
+        if file_format == 'csv':
+            buffer = io.StringIO()
+            data.to_csv(buffer, index=False)
+            content = buffer.getvalue().encode("utf-8")
         elif file_format == 'json':
             content = json.dumps(data).encode('utf-8')
         else:
             raise ValueError(f"Unsupported format: {file_format}")
-        
+
         blob_client.upload_blob(content, overwrite=True)
-        
+
         if logger:
-            logger.info(f"Successfully uploaded {len(data) if hasattr(data, '__len__') else 'data'} records to {blob_name}")
-            
+            logger.info(f"Uploaded {len(data) if hasattr(data, '__len__') else 'data'} records to {blob_name}")
     except Exception as e:
-        error_msg = f"Error uploading to blob {blob_name}: {e}"
+        msg = f"Error uploading to blob {blob_name}: {e}"
         if logger:
-            logger.error(error_msg)
+            logger.error(msg)
         raise
 
-def download_from_blob(blob_name: str, file_format='parquet', logger=None):
+def download_from_blob(blob_name: str, file_format='csv', logger=None):
     """Download data from Azure Blob Storage."""
     try:
         blob_service_client = get_blob_service_client()
         blob_client = blob_service_client.get_blob_client(
-            container=AZURE_CONTAINER_NAME, 
+            container=AZURE_CONTAINER_NAME,
             blob=blob_name
         )
-        
+
         if not blob_client.exists():
             return None
-            
+
         content = blob_client.download_blob().readall()
-        
-        if file_format == 'parquet':
-            return pd.read_parquet(io.BytesIO(content))
+
+        if file_format == 'csv':
+            return pd.read_csv(io.BytesIO(content))
         elif file_format == 'json':
             return json.loads(content.decode('utf-8'))
         else:
             raise ValueError(f"Unsupported format: {file_format}")
-            
     except Exception as e:
         if logger:
             logger.warning(f"Could not download {blob_name}: {e}")
         return None
 
-def append_to_blob_parquet(new_data: pd.DataFrame, blob_name: str, logger=None):
-    """Append data to existing parquet file in blob storage."""
+def append_to_blob_csv(new_data: pd.DataFrame, blob_name: str, logger=None):
+    """Append data to existing CSV file in blob storage."""
     try:
-        # Download existing data
-        existing_data = download_from_blob(blob_name, 'parquet', logger)
-        
+        existing_data = download_from_blob(blob_name, 'csv', logger)
+
         if existing_data is not None:
-            # Remove duplicates based on Date column
             if 'Date' in new_data.columns and 'Date' in existing_data.columns:
-                # Convert Date columns to datetime for proper comparison
                 existing_data['Date'] = pd.to_datetime(existing_data['Date'])
                 new_data['Date'] = pd.to_datetime(new_data['Date'])
-                
-                # Keep only new dates not in existing data
+
                 new_dates = new_data['Date'].isin(existing_data['Date'])
                 new_data_filtered = new_data[~new_dates]
-                
+
                 if len(new_data_filtered) == 0:
                     if logger:
                         logger.info(f"No new data to append to {blob_name}")
                     return
-                
+
                 combined_data = pd.concat([existing_data, new_data_filtered], ignore_index=True)
             else:
                 combined_data = pd.concat([existing_data, new_data], ignore_index=True)
         else:
             combined_data = new_data
-        
-        # Upload combined data
-        upload_to_blob(combined_data, blob_name, 'parquet', logger)
-        
+
+        upload_to_blob(combined_data, blob_name, 'csv', logger)
     except Exception as e:
-        error_msg = f"Error appending to blob {blob_name}: {e}"
+        msg = f"Error appending to blob {blob_name}: {e}"
         if logger:
-            logger.error(error_msg)
+            logger.error(msg)
         raise
 
 def get_last_trading_day(reference_date: Optional[datetime.date] = None) -> datetime.date:
@@ -723,8 +714,8 @@ System Status: {final_health['status']}
         df_forecast = df_forecast.reset_index().rename(columns={'index': 'Date'})
         
         # Save forecast to blob with date in filename
-        forecast_blob = f'forecasts/forecasted_{run_date}.parquet'
-        upload_to_blob(df_forecast, forecast_blob, 'parquet', logger)
+        forecast_blob = f'forecasts/forecasted_{run_date}.csv'
+        upload_to_blob(df_forecast, forecast_blob, 'csv', logger)
         logger.info(f"Forecast saved to blob: {forecast_blob}")
 
         # Compute rolling metrics
