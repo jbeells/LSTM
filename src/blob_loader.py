@@ -33,7 +33,7 @@ for file in files:
     print(f"Converted {csv_path} to {parquet_path}")
 
 # Upload Parquet files to Azure Blob Storage
-container_name = 'data'
+container_name = 'lstm'
 blob_service_client = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
 
 for file in parquet_files:

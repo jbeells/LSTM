@@ -31,8 +31,8 @@ nyse = mcal.get_calendar('NYSE')
 AZURE_CONTAINER_NAME = 'data'
 HISTORICAL_DATA_BLOB = 'historical_data.csv'
 PREDICTED_DATA_BLOB = 'predicted_data.csv'
-MODEL_BLOB = 'models/lstm_model.keras'
-SCALER_BLOB = 'models/scaler.pkl'
+MODEL_BLOB = 'lstm_model.keras'
+SCALER_BLOB = 'scaler.pkl'
 METRICS_BLOB = 'metrics.csv'
 HEALTH_CHECK_BLOB = 'health_check.json'
 
