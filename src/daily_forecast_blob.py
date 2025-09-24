@@ -66,7 +66,7 @@ def get_blob_service_client():
     connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
     if not connection_string:
         raise ValueError("AZURE_STORAGE_CONNECTION_STRING environment variable is required")
-    return BlobServiceClient.from_connection_string(connection_string)
+    return BlobServiceClient(connection_string)
 
 
 def ensure_container_exists(container_name: str, logger=None):
