@@ -28,7 +28,8 @@ from fredapi import Fred
 nyse = mcal.get_calendar('NYSE')
 
 # Azure Blob Storage configuration
-AZURE_CONTAINER_NAME = 'lstm'
+# Allow overriding the container name via environment variable for flexibility in CI
+AZURE_CONTAINER_NAME = os.getenv('AZURE_CONTAINER_NAME', 'lstm')
 HISTORICAL_DATA_BLOB = 'historical_data.csv'
 PREDICTED_DATA_BLOB = 'predicted_data.csv'
 MODEL_BLOB = 'lstm_model.keras'
@@ -66,6 +67,34 @@ def get_blob_service_client():
     if not connection_string:
         raise ValueError("AZURE_STORAGE_CONNECTION_STRING environment variable is required")
     return BlobServiceClient.from_connection_string(connection_string)
+
+
+def ensure_container_exists(container_name: str, logger=None):
+    """Ensure the specified container exists; attempt to create it if missing.
+
+    This is best-effort: creation may fail if credentials lack permission, in
+    which case we'll surface a warning and allow the calling code to handle the error.
+    """
+    try:
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(container_name)
+        try:
+            if not container_client.exists():
+                # Try to create the container
+                try:
+                    blob_service_client.create_container(container_name)
+                    if logger:
+                        logger.info(f"Created missing container: {container_name}")
+                except Exception as e:
+                    if logger:
+                        logger.warning(f"Failed to create container {container_name}: {e}")
+        except Exception as e:
+            # Could not check existence (permission or network issue)
+            if logger:
+                logger.warning(f"Could not verify container {container_name}: {e}")
+    except Exception as e:
+        if logger:
+            logger.warning(f"Could not connect to blob service to ensure container exists: {e}")
 
 def send_notification(subject, message, is_error=False, logger=None):
     """Send email notification about daily forecast status."""
@@ -107,6 +136,9 @@ def send_notification(subject, message, is_error=False, logger=None):
 def upload_to_blob(data, blob_name: str, file_format='csv', logger=None):
     """Upload DataFrame or data to Azure Blob Storage."""
     try:
+        # Ensure container exists (best-effort)
+        ensure_container_exists(AZURE_CONTAINER_NAME, logger)
+
         blob_service_client = get_blob_service_client()
         blob_client = blob_service_client.get_blob_client(
             container=AZURE_CONTAINER_NAME,
@@ -137,6 +169,9 @@ def upload_to_blob(data, blob_name: str, file_format='csv', logger=None):
 def download_from_blob(blob_name: str, file_format='csv', logger=None):
     """Download data from Azure Blob Storage."""
     try:
+        # Ensure container exists (best-effort) to provide clearer errors
+        ensure_container_exists(AZURE_CONTAINER_NAME, logger)
+
         blob_service_client = get_blob_service_client()
         blob_client = blob_service_client.get_blob_client(
             container=AZURE_CONTAINER_NAME,
@@ -163,6 +198,9 @@ def download_from_blob(blob_name: str, file_format='csv', logger=None):
 def append_to_blob_csv(new_data: pd.DataFrame, blob_name: str, logger=None):
     """Append data to existing CSV file in blob storage."""
     try:
+        # Ensure container exists (best-effort)
+        ensure_container_exists(AZURE_CONTAINER_NAME, logger)
+
         # Download existing data
         existing_data = download_from_blob(blob_name, 'csv', logger)
 
