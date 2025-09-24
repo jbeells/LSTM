@@ -29,7 +29,7 @@ nyse = mcal.get_calendar('NYSE')
 
 # Azure Blob Storage configuration
 # Allow overriding the container name via environment variable for flexibility in CI
-AZURE_CONTAINER_NAME = os.getenv('AZURE_CONTAINER_NAME', 'lstm')
+AZURE_CONTAINER_NAME =  'lstm'
 HISTORICAL_DATA_BLOB = 'historical_data.csv'
 PREDICTED_DATA_BLOB = 'predicted_data.csv'
 MODEL_BLOB = 'lstm_model.keras'
