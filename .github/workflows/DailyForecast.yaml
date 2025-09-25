@@ -74,7 +74,7 @@ jobs:
         echo "Runner: ${{ runner.os }}"
         echo "Repository: ${{ github.repository }}"
         echo "Workflow: ${{ github.workflow }}"
-        echo ""
+        echo "" 
         
         # Define required secrets
         REQUIRED_SECRETS=(
