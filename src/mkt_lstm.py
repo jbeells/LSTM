@@ -19,7 +19,6 @@ nyse = mcal.get_calendar('NYSE')
 
 SEQ_LEN = 10
 
-
 # --- Functions ---
 def update_fred_data(start_day='2020-01-01') -> pd.DataFrame:
     """Fetch SP500, VIX, DJIA, and HY Bond Index data from FRED API."""
