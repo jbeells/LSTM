@@ -78,20 +78,20 @@ def ensure_container_exists(container_name: str, logger=None):
     try:
         blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(container_name)
-        try:
-            if not container_client.exists():
-                # Try to create the container
-                try:
-                    blob_service_client.create_container(container_name)
-                    if logger:
-                        logger.info(f"Created missing container: {container_name}")
-                except Exception as e:
-                    if logger:
-                        logger.warning(f"Failed to create container {container_name}: {e}")
-        except Exception as e:
-            # Could not check existence (permission or network issue)
-            if logger:
-                logger.warning(f"Could not verify container {container_name}: {e}")
+        # try:
+        #     if not container_client.exists():
+        #         # Try to create the container
+        #         try:
+        #             blob_service_client.create_container(container_name)
+        #             if logger:
+        #                 logger.info(f"Created missing container: {container_name}")
+        #         except Exception as e:
+        #             if logger:
+        #                 logger.warning(f"Failed to create container {container_name}: {e}")
+        # except Exception as e:
+        #     # Could not check existence (permission or network issue)
+        #     if logger:
+        #         logger.warning(f"Could not verify container {container_name}: {e}")
     except Exception as e:
         if logger:
             logger.warning(f"Could not connect to blob service to ensure container exists: {e}")
@@ -760,7 +760,7 @@ System Status: {final_health['status']}
         df_forecast = df_forecast.reset_index().rename(columns={'index': 'Date'})
 
         # Save forecast to blob with date in filename
-        forecast_blob = f'forecasts/forecasted_{run_date}.csv'
+        forecast_blob = f'forecasted_{run_date}.csv'
         upload_to_blob(df_forecast, forecast_blob, 'csv', logger)
         logger.info(f"Forecast saved to blob: {forecast_blob}")
 
