@@ -357,7 +357,7 @@ def main():
         if not fred_api_key:
             raise ValueError("FRED_API_KEY environment variable is required")
 
-        updated_data = update_fred_data(fred_api_key, logger)
+        updated_data = update_fred_data(fred_api_key)
         
         if updated_data is None or len(updated_data) == 0:
             raise Exception("Failed to fetch updated FRED data")
