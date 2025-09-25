@@ -125,6 +125,7 @@ jobs:
     - name: Run daily forecast
       env:
         FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        AZURE_CONTAINER_NAME: 'lstm'
         AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
         EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
