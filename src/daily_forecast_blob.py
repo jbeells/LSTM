@@ -215,6 +215,55 @@ def list_container_contents(logger=None):
             logger.error(f"Error listing container contents: {e}")
         return []
     
+def test_basic_operations(logger=None):
+    """Test basic blob operations."""
+    try:
+        if logger:
+            logger.info("=== TESTING BASIC BLOB OPERATIONS ===")
+        
+        # Test 1: List container contents before
+        logger.info("BEFORE TEST:")
+        list_container_contents(logger)
+        
+        # Test 2: Upload a simple test file
+        test_data = pd.DataFrame({
+            'Date': ['2024-09-25'],
+            'SP500': [5000.0],
+            'VIXCLS': [20.0],
+            'DJIA': [40000.0],
+            'HY_BOND_IDX': [100.0]
+        })
+        
+        test_blob_name = 'test_upload.csv'
+        if logger:
+            logger.info(f"Uploading test data: {test_blob_name}")
+        
+        upload_to_blob(test_data, test_blob_name, 'csv', logger)
+        
+        # Test 3: List container contents after upload
+        logger.info("AFTER TEST UPLOAD:")
+        list_container_contents(logger)
+        
+        # Test 4: Download the test file
+        if logger:
+            logger.info(f"Downloading test data: {test_blob_name}")
+        
+        downloaded_data = download_from_blob(test_blob_name, 'csv', logger)
+        
+        if downloaded_data is not None:
+            if logger:
+                logger.info("✓ Test upload/download successful")
+        else:
+            if logger:
+                logger.error("✗ Test download failed")
+                
+        return True
+        
+    except Exception as e:
+        if logger:
+            logger.error(f"Basic operations test failed: {e}")
+        return False
+
 def main():
     """Main daily forecast execution with enhanced debugging."""
     logger = setup_logging()
