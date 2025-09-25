@@ -92,32 +92,23 @@ def list_container_contents(logger=None):
         return []
 
 def upload_to_blob(data, blob_name: str, file_format='csv', logger=None):
-    """Upload with explicit blob URL construction to prevent folder creation."""
+    """Upload with proper Azure SDK methods to prevent folder creation."""
     try:
         if logger:
             logger.info(f"=== UPLOAD STARTING ===")
             logger.info(f"Container: {AZURE_CONTAINER_NAME}")
             logger.info(f"Blob name: {blob_name}")
 
-        connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
-        
-        # Extract storage account name from SAS URL
-        if "blob.core.windows.net" in connection_string:
-            # For SAS URLs, extract account name
-            account_name = connection_string.split("//")[1].split(".blob")[0]
-        else:
-            raise ValueError("Cannot determine storage account name from connection string")
-
         blob_service_client = get_blob_service_client()
         
-        # Construct the exact blob URL we want
-        blob_url = f"https://{account_name}.blob.core.windows.net/{AZURE_CONTAINER_NAME}/{blob_name}"
+        # Get container client first
+        container_client = blob_service_client.get_container_client(AZURE_CONTAINER_NAME)
+        
+        # Then get blob client from container (this ensures proper path)
+        blob_client = container_client.get_blob_client(blob_name)
         
         if logger:
-            logger.info(f"Target blob URL: {blob_url}")
-        
-        # Create blob client from the exact URL
-        blob_client = blob_service_client.get_blob_client_from_url(blob_url)
+            logger.info(f"Target blob path: {AZURE_CONTAINER_NAME}/{blob_name}")
 
         # Convert to bytes
         if file_format == 'csv':
@@ -142,10 +133,10 @@ def upload_to_blob(data, blob_name: str, file_format='csv', logger=None):
         if logger:
             logger.info(f"✓ Upload completed successfully")
             
-            # Verify the blob exists at the expected location
+            # Verify the blob exists
             if blob_client.exists():
                 properties = blob_client.get_blob_properties()
-                logger.info(f"✓ Verified: {blob_name} at root level, size: {properties.size} bytes")
+                logger.info(f"✓ Verified: {blob_name} exists, size: {properties.size} bytes")
             else:
                 logger.error(f"✗ Blob not found after upload")
 
@@ -156,35 +147,25 @@ def upload_to_blob(data, blob_name: str, file_format='csv', logger=None):
         raise
 
 def download_from_blob(blob_name: str, file_format='csv', logger=None):
-    """Download with explicit blob URL construction."""
+    """Download with proper Azure SDK methods."""
     try:
         if logger:
             logger.info(f"=== DOWNLOAD STARTING ===")
             logger.info(f"Container: {AZURE_CONTAINER_NAME}")
             logger.info(f"Blob name: {blob_name}")
 
-        connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
-        
-        # Extract storage account name from SAS URL
-        if "blob.core.windows.net" in connection_string:
-            account_name = connection_string.split("//")[1].split(".blob")[0]
-        else:
-            raise ValueError("Cannot determine storage account name from connection string")
-
         blob_service_client = get_blob_service_client()
-        
-        # Construct the exact blob URL
-        blob_url = f"https://{account_name}.blob.core.windows.net/{AZURE_CONTAINER_NAME}/{blob_name}"
-        blob_client = blob_service_client.get_blob_client_from_url(blob_url)
+        container_client = blob_service_client.get_container_client(AZURE_CONTAINER_NAME)
+        blob_client = container_client.get_blob_client(blob_name)
 
         if not blob_client.exists():
             if logger:
-                logger.info(f"Blob {blob_name} does not exist at {blob_url}")
+                logger.info(f"Blob {blob_name} does not exist")
             return None
 
         properties = blob_client.get_blob_properties()
         if logger:
-            logger.info(f"Found blob: size {properties.size} bytes, modified {properties.last_modified}")
+            logger.info(f"Found blob: size {properties.size} bytes")
 
         content = blob_client.download_blob().readall()
         
@@ -206,56 +187,34 @@ def download_from_blob(blob_name: str, file_format='csv', logger=None):
         if logger:
             logger.warning(f"Could not download {blob_name}: {e}")
         return None
-    
-def test_basic_operations(logger=None):
-    """Test basic blob operations."""
+
+def list_container_contents(logger=None):
+    """List container contents with proper error handling."""
     try:
+        blob_service_client = get_blob_service_client()
+        container_client = blob_service_client.get_container_client(AZURE_CONTAINER_NAME)
+        
         if logger:
-            logger.info("=== TESTING BASIC BLOB OPERATIONS ===")
+            logger.info(f"=== CONTAINER CONTENTS: {AZURE_CONTAINER_NAME} ===")
         
-        # Test 1: List container contents before
-        logger.info("BEFORE TEST:")
-        list_container_contents(logger)
+        blob_list = container_client.list_blobs()
+        blobs = list(blob_list)
         
-        # Test 2: Upload a simple test file
-        test_data = pd.DataFrame({
-            'Date': ['2024-09-25'],
-            'SP500': [5000.0],
-            'VIXCLS': [20.0],
-            'DJIA': [40000.0],
-            'HY_BOND_IDX': [100.0]
-        })
-        
-        test_blob_name = 'test_upload.csv'
-        if logger:
-            logger.info(f"Uploading test data: {test_blob_name}")
-        
-        upload_to_blob(test_data, test_blob_name, 'csv', logger)
-        
-        # Test 3: List container contents after upload
-        logger.info("AFTER TEST UPLOAD:")
-        list_container_contents(logger)
-        
-        # Test 4: Download the test file
-        if logger:
-            logger.info(f"Downloading test data: {test_blob_name}")
-        
-        downloaded_data = download_from_blob(test_blob_name, 'csv', logger)
-        
-        if downloaded_data is not None:
+        if not blobs:
             if logger:
-                logger.info("✓ Test upload/download successful")
+                logger.info("Container is empty")
         else:
-            if logger:
-                logger.error("✗ Test download failed")
-                
-        return True
+            for blob in blobs:
+                if logger:
+                    logger.info(f"  📄 {blob.name} ({blob.size} bytes)")
+        
+        return blobs
         
     except Exception as e:
         if logger:
-            logger.error(f"Basic operations test failed: {e}")
-        return False
-
+            logger.error(f"Error listing container contents: {e}")
+        return []
+    
 def main():
     """Main daily forecast execution with enhanced debugging."""
     logger = setup_logging()
