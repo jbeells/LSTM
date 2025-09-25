@@ -92,49 +92,47 @@ def list_container_contents(logger=None):
         return []
 
 def upload_to_blob(data, blob_name: str, file_format='csv', logger=None):
-    """Upload DataFrame or data to Azure Blob Storage with enhanced debugging."""
+    """Upload with explicit blob URL construction to prevent folder creation."""
     try:
         if logger:
             logger.info(f"=== UPLOAD STARTING ===")
             logger.info(f"Container: {AZURE_CONTAINER_NAME}")
             logger.info(f"Blob name: {blob_name}")
-            logger.info(f"Format: {file_format}")
-            
-            if hasattr(data, 'shape'):
-                logger.info(f"Data shape: {data.shape}")
-            elif hasattr(data, '__len__'):
-                logger.info(f"Data length: {len(data)}")
+
+        connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+        
+        # Extract storage account name from SAS URL
+        if "blob.core.windows.net" in connection_string:
+            # For SAS URLs, extract account name
+            account_name = connection_string.split("//")[1].split(".blob")[0]
+        else:
+            raise ValueError("Cannot determine storage account name from connection string")
 
         blob_service_client = get_blob_service_client()
-        blob_client = blob_service_client.get_blob_client(
-            container=AZURE_CONTAINER_NAME,
-            blob=blob_name
-        )
+        
+        # Construct the exact blob URL we want
+        blob_url = f"https://{account_name}.blob.core.windows.net/{AZURE_CONTAINER_NAME}/{blob_name}"
+        
+        if logger:
+            logger.info(f"Target blob URL: {blob_url}")
+        
+        # Create blob client from the exact URL
+        blob_client = blob_service_client.get_blob_client_from_url(blob_url)
 
         # Convert to bytes
         if file_format == 'csv':
             buffer = io.StringIO()
             data.to_csv(buffer, index=False)
-            content = buffer.getvalue()
-            content_bytes = content.encode('utf-8')
-            
-            if logger:
-                logger.info(f"CSV content length: {len(content)} chars, {len(content_bytes)} bytes")
-                logger.info(f"First 200 chars: {content[:200]}")
-                
+            content_bytes = buffer.getvalue().encode('utf-8')
         elif file_format == 'json':
-            content = json.dumps(data, indent=2)
-            content_bytes = content.encode('utf-8')
-            
-            if logger:
-                logger.info(f"JSON content length: {len(content)} chars, {len(content_bytes)} bytes")
+            content_bytes = json.dumps(data, indent=2).encode('utf-8')
         else:
             raise ValueError(f"Unsupported format: {file_format}")
 
-        # Upload with explicit parameters
         if logger:
-            logger.info(f"Uploading {len(content_bytes)} bytes to {AZURE_CONTAINER_NAME}/{blob_name}")
-            
+            logger.info(f"Uploading {len(content_bytes)} bytes")
+
+        # Upload with explicit overwrite
         blob_client.upload_blob(
             data=content_bytes, 
             overwrite=True,
@@ -144,12 +142,12 @@ def upload_to_blob(data, blob_name: str, file_format='csv', logger=None):
         if logger:
             logger.info(f"✓ Upload completed successfully")
             
-            # Verify the upload by checking if blob exists
+            # Verify the blob exists at the expected location
             if blob_client.exists():
                 properties = blob_client.get_blob_properties()
-                logger.info(f"✓ Blob verified - Size: {properties.size} bytes, Last modified: {properties.last_modified}")
+                logger.info(f"✓ Verified: {blob_name} at root level, size: {properties.size} bytes")
             else:
-                logger.error(f"✗ Upload failed - Blob does not exist after upload")
+                logger.error(f"✗ Blob not found after upload")
 
     except Exception as e:
         error_msg = f"Error uploading to blob {blob_name}: {e}"
@@ -158,27 +156,35 @@ def upload_to_blob(data, blob_name: str, file_format='csv', logger=None):
         raise
 
 def download_from_blob(blob_name: str, file_format='csv', logger=None):
-    """Download data from Azure Blob Storage with enhanced debugging."""
+    """Download with explicit blob URL construction."""
     try:
         if logger:
             logger.info(f"=== DOWNLOAD STARTING ===")
             logger.info(f"Container: {AZURE_CONTAINER_NAME}")
             logger.info(f"Blob name: {blob_name}")
 
+        connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+        
+        # Extract storage account name from SAS URL
+        if "blob.core.windows.net" in connection_string:
+            account_name = connection_string.split("//")[1].split(".blob")[0]
+        else:
+            raise ValueError("Cannot determine storage account name from connection string")
+
         blob_service_client = get_blob_service_client()
-        blob_client = blob_service_client.get_blob_client(
-            container=AZURE_CONTAINER_NAME,
-            blob=blob_name
-        )
+        
+        # Construct the exact blob URL
+        blob_url = f"https://{account_name}.blob.core.windows.net/{AZURE_CONTAINER_NAME}/{blob_name}"
+        blob_client = blob_service_client.get_blob_client_from_url(blob_url)
 
         if not blob_client.exists():
             if logger:
-                logger.info(f"Blob {blob_name} does not exist")
+                logger.info(f"Blob {blob_name} does not exist at {blob_url}")
             return None
 
         properties = blob_client.get_blob_properties()
         if logger:
-            logger.info(f"Blob found - Size: {properties.size} bytes, Last modified: {properties.last_modified}")
+            logger.info(f"Found blob: size {properties.size} bytes, modified {properties.last_modified}")
 
         content = blob_client.download_blob().readall()
         
@@ -188,15 +194,10 @@ def download_from_blob(blob_name: str, file_format='csv', logger=None):
         if file_format == 'csv':
             df = pd.read_csv(io.StringIO(content.decode('utf-8')))
             if logger:
-                logger.info(f"Parsed CSV - Shape: {df.shape}")
-                if len(df) > 0:
-                    logger.info(f"Columns: {list(df.columns)}")
-                    logger.info(f"First few rows:\n{df.head()}")
+                logger.info(f"Parsed CSV: {df.shape}")
             return df
         elif file_format == 'json':
             data = json.loads(content.decode('utf-8'))
-            if logger:
-                logger.info(f"Parsed JSON with {len(data) if hasattr(data, '__len__') else 'unknown'} items")
             return data
         else:
             raise ValueError(f"Unsupported format: {file_format}")
@@ -205,7 +206,7 @@ def download_from_blob(blob_name: str, file_format='csv', logger=None):
         if logger:
             logger.warning(f"Could not download {blob_name}: {e}")
         return None
-
+    
 def test_basic_operations(logger=None):
     """Test basic blob operations."""
     try:
