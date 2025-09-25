@@ -41,13 +41,12 @@ def update_fred_data(start_day='2020-01-01') -> pd.DataFrame:
 
     df_data = df_sp500.merge(df_vix, on='Date').merge(df_djia, on='Date').merge(df_bond, on='Date')
     df_data['Date'] = pd.to_datetime(df_data['Date'])
-    df_data.set_index('Date', inplace=True)
     df_data = df_data.dropna()
 
-    schedule = nyse.schedule(start_date=df_data.index.min(), end_date=df_data.index.max())
-    df_data = df_data[df_data.index.isin(schedule.index)]
+    schedule = nyse.schedule(start_date=df_data['Date'].min(), end_date=df_data['Date'].max())
+    df_data = df_data[df_data['Date'].isin(schedule.index)]
+    df_data = df_data.reset_index(drop=True)  # Ensures clean index
     return df_data
-
 
 def create_sequences(data: np.ndarray, seq_length: int):
     """Prepare LSTM input-output sequences."""
