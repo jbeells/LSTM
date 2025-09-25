@@ -18,13 +18,6 @@ load_dotenv()
 warnings.filterwarnings('ignore', message='.*does not have valid feature names.*')
 nyse = mcal.get_calendar('NYSE')
 
-# Base paths
-PROJECT_ROOT = os.getenv("PROJECT_ROOT", ".")
-DATA_OUTPUT = os.path.join(PROJECT_ROOT, 'data/output')
-MODEL_OUTPUT = os.path.join(PROJECT_ROOT, 'models')
-os.makedirs(DATA_OUTPUT, exist_ok=True)
-os.makedirs(MODEL_OUTPUT, exist_ok=True)
-
 SEQ_LEN = 10
 
 
@@ -91,6 +84,13 @@ def forecast_n_days(model, scaler, df_data: pd.DataFrame, n_days=5):
 
 # --- Main Execution Block (only when run directly) ---
 if __name__ == "__main__":
+    # Base paths
+    PROJECT_ROOT = os.getenv("PROJECT_ROOT", ".")
+    DATA_OUTPUT = os.path.join(PROJECT_ROOT, 'data/output')
+    MODEL_OUTPUT = os.path.join(PROJECT_ROOT, 'models')
+    os.makedirs(DATA_OUTPUT, exist_ok=True)
+    os.makedirs(MODEL_OUTPUT, exist_ok=True)
+
     score_date = datetime.today().strftime('%Y-%m-%d')
 
     df_data = update_fred_data()
