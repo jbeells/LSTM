@@ -1,7 +1,5 @@
 """
-Daily forecasting script for automated daily scoring - Azure Blob Storage Version.
-Production version with Azure Blob Storage, CSV format, and GitHub Actions compatibility.
-Enhanced with trading day checks and gap handling.
+DIAGNOSTIC VERSION - Daily forecasting script with enhanced debugging
 """
 import os
 import sys
@@ -54,63 +52,104 @@ def setup_logging():
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            # Remove file handler - only use console in GitHub Actions
             logging.StreamHandler(sys.stdout)
         ]
     )
     return logging.getLogger(__name__)
 
 def get_blob_service_client():
-    """Get Azure Blob Service Client."""
+    """Get Azure Blob Service Client with enhanced debugging."""
     connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
     if not connection_string:
         raise ValueError("AZURE_STORAGE_CONNECTION_STRING environment variable is required")
-    return BlobServiceClient.from_connection_string(connection_string)
+    
+    client = BlobServiceClient.from_connection_string(connection_string)
+    return client
 
-def ensure_container_exists(container_name: str, logger=None):
-    """Ensure the specified container exists."""
+def list_container_contents(logger=None):
+    """List all blobs in the container for debugging."""
     try:
         blob_service_client = get_blob_service_client()
-        container_client = blob_service_client.get_container_client(container_name)
+        container_client = blob_service_client.get_container_client(AZURE_CONTAINER_NAME)
         
-        # Just verify it exists - don't try to create
-        if not container_client.exists():
+        if logger:
+            logger.info(f"=== CONTAINER CONTENTS: {AZURE_CONTAINER_NAME} ===")
+        
+        blobs = list(container_client.list_blobs())
+        for blob in blobs:
             if logger:
-                logger.warning(f"Container {container_name} does not exist")
-        else:
+                logger.info(f"  - {blob.name} (size: {blob.size} bytes, modified: {blob.last_modified})")
+        
+        if not blobs:
             if logger:
-                logger.info(f"Container {container_name} exists")
+                logger.info("  Container is empty")
                 
+        return blobs
+        
     except Exception as e:
         if logger:
-            logger.warning(f"Could not verify container {container_name}: {e}")
+            logger.error(f"Error listing container contents: {e}")
+        return []
 
 def upload_to_blob(data, blob_name: str, file_format='csv', logger=None):
-    """Upload DataFrame or data to Azure Blob Storage."""
+    """Upload DataFrame or data to Azure Blob Storage with enhanced debugging."""
     try:
+        if logger:
+            logger.info(f"=== UPLOAD STARTING ===")
+            logger.info(f"Container: {AZURE_CONTAINER_NAME}")
+            logger.info(f"Blob name: {blob_name}")
+            logger.info(f"Format: {file_format}")
+            
+            if hasattr(data, 'shape'):
+                logger.info(f"Data shape: {data.shape}")
+            elif hasattr(data, '__len__'):
+                logger.info(f"Data length: {len(data)}")
+
         blob_service_client = get_blob_service_client()
-        
-        # Use absolute blob path - no folders
         blob_client = blob_service_client.get_blob_client(
             container=AZURE_CONTAINER_NAME,
-            blob=blob_name  # Use exact blob name without any path manipulation
+            blob=blob_name
         )
 
         # Convert to bytes
         if file_format == 'csv':
             buffer = io.StringIO()
             data.to_csv(buffer, index=False)
-            content = buffer.getvalue().encode('utf-8')
+            content = buffer.getvalue()
+            content_bytes = content.encode('utf-8')
+            
+            if logger:
+                logger.info(f"CSV content length: {len(content)} chars, {len(content_bytes)} bytes")
+                logger.info(f"First 200 chars: {content[:200]}")
+                
         elif file_format == 'json':
-            content = json.dumps(data, indent=2).encode('utf-8')
+            content = json.dumps(data, indent=2)
+            content_bytes = content.encode('utf-8')
+            
+            if logger:
+                logger.info(f"JSON content length: {len(content)} chars, {len(content_bytes)} bytes")
         else:
             raise ValueError(f"Unsupported format: {file_format}")
 
-        # Upload directly - overwrite existing
-        blob_client.upload_blob(content, overwrite=True)
+        # Upload with explicit parameters
+        if logger:
+            logger.info(f"Uploading {len(content_bytes)} bytes to {AZURE_CONTAINER_NAME}/{blob_name}")
+            
+        blob_client.upload_blob(
+            data=content_bytes, 
+            overwrite=True,
+            content_type='text/csv' if file_format == 'csv' else 'application/json'
+        )
 
         if logger:
-            logger.info(f"Successfully uploaded to blob: {AZURE_CONTAINER_NAME}/{blob_name}")
+            logger.info(f"✓ Upload completed successfully")
+            
+            # Verify the upload by checking if blob exists
+            if blob_client.exists():
+                properties = blob_client.get_blob_properties()
+                logger.info(f"✓ Blob verified - Size: {properties.size} bytes, Last modified: {properties.last_modified}")
+            else:
+                logger.error(f"✗ Upload failed - Blob does not exist after upload")
 
     except Exception as e:
         error_msg = f"Error uploading to blob {blob_name}: {e}"
@@ -119,14 +158,17 @@ def upload_to_blob(data, blob_name: str, file_format='csv', logger=None):
         raise
 
 def download_from_blob(blob_name: str, file_format='csv', logger=None):
-    """Download data from Azure Blob Storage."""
+    """Download data from Azure Blob Storage with enhanced debugging."""
     try:
+        if logger:
+            logger.info(f"=== DOWNLOAD STARTING ===")
+            logger.info(f"Container: {AZURE_CONTAINER_NAME}")
+            logger.info(f"Blob name: {blob_name}")
+
         blob_service_client = get_blob_service_client()
-        
-        # Use absolute blob path
         blob_client = blob_service_client.get_blob_client(
             container=AZURE_CONTAINER_NAME,
-            blob=blob_name  # Use exact blob name
+            blob=blob_name
         )
 
         if not blob_client.exists():
@@ -134,12 +176,28 @@ def download_from_blob(blob_name: str, file_format='csv', logger=None):
                 logger.info(f"Blob {blob_name} does not exist")
             return None
 
+        properties = blob_client.get_blob_properties()
+        if logger:
+            logger.info(f"Blob found - Size: {properties.size} bytes, Last modified: {properties.last_modified}")
+
         content = blob_client.download_blob().readall()
+        
+        if logger:
+            logger.info(f"Downloaded {len(content)} bytes")
 
         if file_format == 'csv':
-            return pd.read_csv(io.StringIO(content.decode('utf-8')))
+            df = pd.read_csv(io.StringIO(content.decode('utf-8')))
+            if logger:
+                logger.info(f"Parsed CSV - Shape: {df.shape}")
+                if len(df) > 0:
+                    logger.info(f"Columns: {list(df.columns)}")
+                    logger.info(f"First few rows:\n{df.head()}")
+            return df
         elif file_format == 'json':
-            return json.loads(content.decode('utf-8'))
+            data = json.loads(content.decode('utf-8'))
+            if logger:
+                logger.info(f"Parsed JSON with {len(data) if hasattr(data, '__len__') else 'unknown'} items")
+            return data
         else:
             raise ValueError(f"Unsupported format: {file_format}")
 
@@ -148,83 +206,128 @@ def download_from_blob(blob_name: str, file_format='csv', logger=None):
             logger.warning(f"Could not download {blob_name}: {e}")
         return None
 
-def load_model_and_scaler_from_blob(logger=None):
-    """Load model and scaler from Azure Blob Storage."""
+def test_basic_operations(logger=None):
+    """Test basic blob operations."""
     try:
-        blob_service_client = get_blob_service_client()
-
-        # Download model with explicit path
         if logger:
-            logger.info(f"Loading model from: {AZURE_CONTAINER_NAME}/{MODEL_BLOB}")
-            
-        model_blob_client = blob_service_client.get_blob_client(
-            container=AZURE_CONTAINER_NAME,
-            blob=MODEL_BLOB  # Direct blob name - no path manipulation
-        )
-
-        if not model_blob_client.exists():
-            raise Exception(f"Model blob {MODEL_BLOB} does not exist in container {AZURE_CONTAINER_NAME}")
-
-        model_content = model_blob_client.download_blob().readall()
-
-        # Use a unique temp file name to avoid conflicts
-        temp_dir = tempfile.mkdtemp()
-        temp_model_path = os.path.join(temp_dir, 'model.keras')
+            logger.info("=== TESTING BASIC BLOB OPERATIONS ===")
         
-        with open(temp_model_path, 'wb') as temp_file:
-            temp_file.write(model_content)
-
-        model = tf.keras.models.load_model(temp_model_path)
-
-        # Clean up temp files
-        os.remove(temp_model_path)
-        os.rmdir(temp_dir)
-
-        # Download scaler
+        # Test 1: List container contents before
+        logger.info("BEFORE TEST:")
+        list_container_contents(logger)
+        
+        # Test 2: Upload a simple test file
+        test_data = pd.DataFrame({
+            'Date': ['2024-09-25'],
+            'SP500': [5000.0],
+            'VIXCLS': [20.0],
+            'DJIA': [40000.0],
+            'HY_BOND_IDX': [100.0]
+        })
+        
+        test_blob_name = 'test_upload.csv'
         if logger:
-            logger.info(f"Loading scaler from: {AZURE_CONTAINER_NAME}/{SCALER_BLOB}")
-            
-        scaler_blob_client = blob_service_client.get_blob_client(
-            container=AZURE_CONTAINER_NAME,
-            blob=SCALER_BLOB  # Direct blob name
-        )
-
-        if not scaler_blob_client.exists():
-            raise Exception(f"Scaler blob {SCALER_BLOB} does not exist in container {AZURE_CONTAINER_NAME}")
-
-        scaler_content = scaler_blob_client.download_blob().readall()
-        scaler = pickle.loads(scaler_content)
-
+            logger.info(f"Uploading test data: {test_blob_name}")
+        
+        upload_to_blob(test_data, test_blob_name, 'csv', logger)
+        
+        # Test 3: List container contents after upload
+        logger.info("AFTER TEST UPLOAD:")
+        list_container_contents(logger)
+        
+        # Test 4: Download the test file
         if logger:
-            logger.info("Model and scaler loaded successfully from blob storage")
-
-        return model, scaler
-
+            logger.info(f"Downloading test data: {test_blob_name}")
+        
+        downloaded_data = download_from_blob(test_blob_name, 'csv', logger)
+        
+        if downloaded_data is not None:
+            if logger:
+                logger.info("✓ Test upload/download successful")
+        else:
+            if logger:
+                logger.error("✗ Test download failed")
+                
+        return True
+        
     except Exception as e:
-        error_msg = f"Error loading model and scaler from blob: {e}"
         if logger:
-            logger.error(error_msg)
-        raise Exception(error_msg)
-
-# [Keep all other functions the same as in your original file, but apply the same pattern:
-# - Remove file logging
-# - Use direct blob names without path manipulation
-# - Add explicit container/blob logging]
+            logger.error(f"Basic operations test failed: {e}")
+        return False
 
 def main():
-    """Main daily forecast execution with enhanced robustness."""
-    # Setup logging - no file logging in GitHub Actions
+    """Main daily forecast execution with enhanced debugging."""
     logger = setup_logging()
     run_date = datetime.date.today().strftime('%Y-%m-%d')
 
     logger.info(f"=" * 80)
-    logger.info(f"DAILY FORECAST STARTED - {run_date}")
+    logger.info(f"DAILY FORECAST DIAGNOSTIC VERSION - {run_date}")
     logger.info(f"Using Azure Blob Storage container: {AZURE_CONTAINER_NAME}")
     logger.info(f"Current working directory: {os.getcwd()}")
+    logger.info(f"Python version: {sys.version}")
     logger.info(f"=" * 80)
 
-    # Rest of your main function...
-    # [Keep the same logic but ensure all blob operations use direct paths]
+    # Environment variable check
+    logger.info("=== ENVIRONMENT VARIABLES ===")
+    logger.info(f"AZURE_CONTAINER_NAME: {AZURE_CONTAINER_NAME}")
+    logger.info(f"AZURE_STORAGE_CONNECTION_STRING: {'SET' if os.getenv('AZURE_STORAGE_CONNECTION_STRING') else 'NOT SET'}")
+    logger.info(f"FRED_API_KEY: {'SET' if os.getenv('FRED_API_KEY') else 'NOT SET'}")
+
+    try:
+        # Test basic blob operations first
+        logger.info("=== TESTING BLOB OPERATIONS ===")
+        test_success = test_basic_operations(logger)
+        
+        if not test_success:
+            raise Exception("Basic blob operations test failed")
+
+        # List current container state
+        logger.info("=== CURRENT CONTAINER STATE ===")
+        existing_blobs = list_container_contents(logger)
+        
+        # Check for required model files
+        model_exists = any(blob.name == MODEL_BLOB for blob in existing_blobs)
+        scaler_exists = any(blob.name == SCALER_BLOB for blob in existing_blobs)
+        
+        logger.info(f"Model file ({MODEL_BLOB}) exists: {model_exists}")
+        logger.info(f"Scaler file ({SCALER_BLOB}) exists: {scaler_exists}")
+        
+        if not model_exists or not scaler_exists:
+            logger.error("Required model files are missing from blob storage!")
+            logger.error("Please ensure lstm_model.keras and scaler.pkl are in the container root")
+            return
+        
+        # Try a simple health check upload
+        logger.info("=== UPLOADING HEALTH CHECK ===")
+        health_data = {
+            'timestamp': datetime.datetime.now().isoformat(),
+            'status': 'diagnostic_run',
+            'container': AZURE_CONTAINER_NAME,
+            'blobs_found': [blob.name for blob in existing_blobs]
+        }
+        
+        upload_to_blob(health_data, HEALTH_CHECK_BLOB, 'json', logger)
+        
+        # List container after health check upload
+        logger.info("=== AFTER HEALTH CHECK UPLOAD ===")
+        list_container_contents(logger)
+        
+        # Try downloading existing historical data
+        logger.info("=== TESTING HISTORICAL DATA DOWNLOAD ===")
+        historical_data = download_from_blob(HISTORICAL_DATA_BLOB, 'csv', logger)
+        
+        if historical_data is not None:
+            logger.info(f"Historical data found: {len(historical_data)} rows")
+            logger.info(f"Date range: {historical_data['Date'].min()} to {historical_data['Date'].max()}")
+        else:
+            logger.info("No historical data found - this might be the first run")
+
+        logger.info("=== DIAGNOSTIC COMPLETED ===")
+        logger.info("Check the container contents above to see if files were uploaded")
+
+    except Exception as e:
+        logger.error(f"Diagnostic failed: {e}", exc_info=True)
+        raise
 
 if __name__ == '__main__':
     main()
