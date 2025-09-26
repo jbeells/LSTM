@@ -38,9 +38,15 @@ def update_fred_data(start_day='2020-01-01') -> pd.DataFrame:
     df_bond = pd.DataFrame(bond, columns=['HY_BOND_IDX'])
     df_bond['Date'] = df_bond.index
 
+    # Fill missing values by carrying forward the previous day's data
+    df_sp500.fillna(method='ffill', inplace=True)
+    df_vix.fillna(method='ffill', inplace=True)
+    df_djia.fillna(method='ffill', inplace=True)
+    df_bond.fillna(method='ffill', inplace=True)
+
     df_data = df_sp500.merge(df_vix, on='Date').merge(df_djia, on='Date').merge(df_bond, on='Date')
     df_data['Date'] = pd.to_datetime(df_data['Date'])
-    df_data = df_data.dropna()
+    df_data.fillna(method='ffill', inplace=True)
 
     schedule = nyse.schedule(start_date=df_data['Date'].min(), end_date=df_data['Date'].max())
     df_data = df_data[df_data['Date'].isin(schedule.index)]
@@ -93,6 +99,11 @@ if __name__ == "__main__":
     # Fetch and prepare data
     df_data = update_fred_data()
 
+    # Save actual data (include Date column explicitly)
+    # Ensure Date is included as the first column
+    cols_actual = ['Date'] + [c for c in df_data.columns if c != 'Date']
+    df_data.to_csv(os.path.join(DATA_OUTPUT, 'actuals.csv'), columns=cols_actual, index=False, date_format='%Y-%m-%d')
+
     # Separate date column before scaling
     dates = df_data['Date']
     numeric_data = df_data.drop('Date', axis=1)
@@ -139,6 +150,16 @@ if __name__ == "__main__":
         for metric, value in m.items():
             metrics_row[f'{asset}_{metric}'] = value
     pd.DataFrame([metrics_row]).to_csv(os.path.join(DATA_OUTPUT, 'model_metrics.csv'), index=False)
+
+    # Generate predictions for all dates in df_data
+    full_scaled = scaler.transform(numeric_data)
+    X_full, _ = create_sequences(full_scaled, SEQ_LEN)
+    preds_scaled = model.predict(X_full, verbose=0)
+    preds = scaler.inverse_transform(preds_scaled)
+    pred_dates = df_data['Date'].iloc[SEQ_LEN:].reset_index(drop=True)
+    pred_df = pd.DataFrame(preds, columns=numeric_data.columns)
+    pred_df.insert(0, 'Date', pred_dates)
+    pred_df.to_csv(os.path.join(DATA_OUTPUT, 'predicted.csv'), index=False, date_format='%Y-%m-%d')
 
     # Forecast n_days ahead
     n_days = 30
