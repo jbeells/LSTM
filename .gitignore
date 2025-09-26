@@ -8,9 +8,6 @@ env/
 .venv/
 .ipynb_checkpoints/
 .ipynb/
-data/raw/
-data/cleaned/
-data/formatted/
 .DS_Store
 tf_env/
 
