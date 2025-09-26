@@ -147,7 +147,7 @@ if __name__ == "__main__":
 
     forecasts = forecast_n_days(model, scaler, df_data, n_days)
     forecast_df = pd.DataFrame(forecasts, columns=numeric_data.columns, index=future_dates)
-    forecast_df.reset_index().rename(columns={'index': 'Date'}).to_csv(os.path.join(DATA_OUTPUT, 'forecasted_data.csv'), index=False)
+forecast_df.reset_index().rename(columns={'index': 'Date'}).to_csv(os.path.join(DATA_OUTPUT, 'forecasted_data.csv'), index=False, date_format='%Y-%m-%d')
 
     # Save model and scaler
     model.save(os.path.join(MODEL_OUTPUT, 'lstm_model.keras'))
