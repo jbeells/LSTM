@@ -43,6 +43,7 @@ def update_fred_data(start_day='2020-01-01') -> pd.DataFrame:
     df_data = df_data.dropna()
 
     schedule = nyse.schedule(start_date=df_data['Date'].min(), end_date=df_data['Date'].max())
+    schedule.index = schedule.index.union(schedule.index)
     df_data = df_data[df_data['Date'].isin(schedule.index)]
     df_data = df_data.reset_index(drop=True)  # Ensures clean index
     return df_data
@@ -92,8 +93,7 @@ if __name__ == "__main__":
 
     df_data = update_fred_data()
     scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df_data)
-
+    scaled_data = scaler.fit_transform(df_data.drop(columns=['Date']))
     X, y = create_sequences(scaled_data, SEQ_LEN)
     split = int(0.8 * len(X))
     X_train, X_test, y_train, y_test = X[:split], X[split:], y[:split], y[split:]
