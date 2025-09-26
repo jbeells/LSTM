@@ -69,10 +69,10 @@ def build_lstm(input_shape, output_dim: int):
 
 def forecast_n_days(model, scaler, df_data: pd.DataFrame, n_days=5):
     """Forecast future values for n_days using a trained LSTM model."""
-    seq = scaler.transform(df_data)[-SEQ_LEN:].copy()
+    seq = scaler.transform(df_data.drop('Date', axis=1))[-SEQ_LEN:].copy()
     forecasts = []
     for _ in range(n_days):
-        pred_scaled = model.predict(seq.reshape(1, SEQ_LEN, df_data.shape[1]), verbose=0)
+        pred_scaled = model.predict(seq.reshape(1, SEQ_LEN, seq.shape[1]), verbose=0)
         pred = scaler.inverse_transform(pred_scaled)[0]
         forecasts.append(pred)
         seq = np.vstack([seq[1:], scaler.transform(pred.reshape(1, -1))])
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     y_test_rescaled = scaler.inverse_transform(y_test)
 
     metrics = {}
-    for i, col in enumerate(df_data.columns):
+    for i, col in enumerate(numeric_data.columns):
         metrics[col] = {
             'MSE': mean_squared_error(y_test_rescaled[:, i], y_pred_rescaled[:, i]),
             'MAE': mean_absolute_error(y_test_rescaled[:, i], y_pred_rescaled[:, i]),
@@ -142,11 +142,11 @@ if __name__ == "__main__":
 
     # Forecast n_days ahead
     n_days = 30
-    last_date = df_data.index[-1]
+    last_date = df_data['Date'].iloc[-1]
     future_dates = nyse.valid_days(start_date=last_date + pd.Timedelta(days=1), end_date=last_date + pd.Timedelta(days=60))[:n_days]
 
     forecasts = forecast_n_days(model, scaler, df_data, n_days)
-    forecast_df = pd.DataFrame(forecasts, columns=df_data.columns, index=future_dates)
+    forecast_df = pd.DataFrame(forecasts, columns=numeric_data.columns, index=future_dates)
     forecast_df.reset_index().rename(columns={'index': 'Date'}).to_csv(os.path.join(DATA_OUTPUT, 'forecasted_data.csv'), index=False)
 
     # Save model and scaler
