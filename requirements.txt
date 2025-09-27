@@ -7,18 +7,32 @@ python-dotenv>=0.19.0
 
 # Financial data and market calendars
 fredapi>=0.4.3
-pandas-market-calendars>=4.0.0
+pandas-market-calendars>=2.1  # Using 2.1 - newer versions had compatibility issues
 
-# Azure Blob Storage
+# Email dependencies (built-in smtplib is used, no extra package needed)
+# secure-smtplib>=0.1.1  # Removed - using built-in smtplib
+
+# Data visualization and analysis
+matplotlib>=3.7.0
+scipy>=1.9.0,<1.11.0
+statsmodels>=0.14.0
+
+# Azure Blob Storage (if needed for cloud storage)
 azure-storage-blob>=12.14.0
 
-# Email dependencies
-secure-smtplib>=0.1.1
-
-# Add the missing custom module (assuming it's in your repo)
-# If mkt_lstm is a local module, ensure it's in your repository
-# If it's a package, add it here with proper version
-statsmodels==0.14.0
-matplotlib==3.7.0
-scipy>=1.9.0,<1.11.0
+# Additional dependencies for daily forecast system
+# All required packages are already included above
+# The daily_forecast.py script uses:
+# - pandas (data manipulation)
+# - numpy (numerical operations)
+# - tensorflow (LSTM model loading and prediction)
+# - scikit-learn (metrics calculation)
+# - pandas_market_calendars (NYSE calendar)
+# - fredapi (FRED data fetching)
+# - python-dotenv (environment variables)
+# - smtplib (built-in, email notifications)
+# - pickle (built-in, model loading)
+# - logging (built-in, logging functionality)
+# - datetime (built-in, date operations)
+# - os, sys (built-in, system operations)
 
