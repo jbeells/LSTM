@@ -1,0 +1,155 @@
+name: Daily LSTM Forecast
+
+on:
+  # Run daily at 9:30 AM EST (after market open)
+  schedule:
+    - cron: '30 14 * * 1-5'  # 9:30 AM EST on weekdays (UTC-5/UTC-4)
+  
+  # Allow manual triggering for testing
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Force run even if market is closed'
+        required: false
+        default: false
+        type: boolean
+
+# Set timezone for the workflow
+env:
+  TZ: America/New_York
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Verify project structure
+      run: |
+        echo "Project structure:"
+        ls -la
+        echo "Source directory:"
+        ls -la src/
+        echo "Models directory:"
+        ls -la models/
+        echo "Data directories:"
+        ls -la data/
+        
+    - name: Set up environment variables
+      run: |
+        echo "Setting up environment variables for forecasting..."
+        # Environment variables are set via GitHub secrets
+        # FRED_API_KEY, EMAIL_*, NOTIFICATION_EMAIL are available as secrets
+        
+    - name: Run daily forecast
+      env:
+        FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+        EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
+        NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+        PROJECT_ROOT: ${{ github.workspace }}
+        PYTHONPATH: ${{ github.workspace }}/src
+        FORCE_RUN: ${{ github.event.inputs.force_run || 'false' }}
+      run: |
+        cd src
+        python daily_forecast.py
+        
+    - name: Upload forecast results
+      if: always()  # Upload even if forecast fails for debugging
+      uses: actions/upload-artifact@v4
+      with:
+        name: forecast-results-${{ github.run_number }}
+        path: |
+          data/upload/*.csv
+          logs/*.log
+        retention-days: 30
+        
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: forecast-failure-logs-${{ github.run_number }}
+        path: logs/
+        retention-days: 90
+        
+    - name: Check forecast outputs
+      if: success()
+      run: |
+        echo "Checking forecast outputs..."
+        if [ -f data/upload/actuals.csv ]; then
+          echo "✓ Actuals data saved"
+          echo "Rows in actuals.csv: $(wc -l < data/upload/actuals.csv)"
+        else
+          echo "✗ Actuals data missing"
+        fi
+        
+        if [ -f data/upload/predicted.csv ]; then
+          echo "✓ Predictions data saved"
+          echo "Rows in predicted.csv: $(wc -l < data/upload/predicted.csv)"
+        else
+          echo "✗ Predictions data missing"
+        fi
+        
+        if [ -f data/upload/forecasted_data.csv ]; then
+          echo "✓ Forecast data saved"
+          echo "Rows in forecasted_data.csv: $(wc -l < data/upload/forecasted_data.csv)"
+        else
+          echo "✗ Forecast data missing"
+        fi
+        
+        if [ -f data/upload/model_metrics.csv ]; then
+          echo "✓ Model metrics saved"
+          echo "Metrics content:"
+          head -n 5 data/upload/model_metrics.csv
+        else
+          echo "✗ Model metrics missing"
+        fi
+        
+    - name: Install Azure Storage dependencies
+      if: success()
+      run: |
+        pip install azure-storage-blob
+        
+    - name: Upload CSV files to Azure Blob Storage
+      if: success()
+      env:
+        AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        AZURE_CONTAINER_NAME: ${{ secrets.AZURE_CONTAINER_NAME }}
+      run: |
+        cd src
+        python daily_blob_uploader.py
+        
+    - name: Blob upload summary
+      if: success()
+      run: |
+        echo "✓ CSV files successfully uploaded to Azure Blob Storage"
+        echo "Container: ${{ secrets.AZURE_CONTAINER_NAME }}"
+        echo "Upload timestamp: $(date -u)"
+        
+    - name: Summary
+      if: always()
+      run: |
+        echo "===== DAILY FORECAST WORKFLOW SUMMARY ====="
+        echo "Workflow: ${{ github.workflow }}"
+        echo "Run ID: ${{ github.run_id }}"
+        echo "Run Number: ${{ github.run_number }}"
+        echo "Triggered by: ${{ github.event_name }}"
+        echo "Status: ${{ job.status }}"
+        echo "Timestamp: $(date -u)"
+        echo "=============================================="
