@@ -7,7 +7,7 @@ python-dotenv>=1.0.0
 
 # Financial data and market calendars
 fredapi>=0.4.3
-pandas-market-calendar>=2  # Using 2.1 - newer versions had compatibility issues
+pandas-market-calendar==2.1.0  # Using 2.1 - newer versions had compatibility issues
 
 # Email dependencies (built-in smtplib is used, no extra package needed)
 # secure-smtplib>=0.1.1  # Removed - using built-in smtplib
