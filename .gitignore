@@ -4,6 +4,8 @@
 
 # Python / build / runtime
 pycache/
+src/__pycache__/*
+__pycache__
 .py[cod]
 .pyo
 .pyd
@@ -23,6 +25,10 @@ build/
 dist/
 *.egg-info/
 .eggs/
+data/upload/*
+data/output/*
+data/
+logs/* 
 
 # Installer logs
 pip-log.txt
