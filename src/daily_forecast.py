@@ -418,7 +418,6 @@ def validate_dataframes(df_actuals: pd.DataFrame, df_predicted: pd.DataFrame, df
     
     return validation_passed
 
-
 def save_dataframes(df_actuals: pd.DataFrame, df_predicted: pd.DataFrame, 
                    df_forecast: pd.DataFrame, df_metrics: pd.DataFrame) -> bool:
     """
@@ -450,6 +449,15 @@ def save_dataframes(df_actuals: pd.DataFrame, df_predicted: pd.DataFrame,
                 logger.error(f"Cannot save {description}: DataFrame is empty")
                 all_successful = False
                 continue
+            
+            # Reorder columns to match REQUIRED_COLUMNS if this is one of the main dataframes
+            if filename in ['actuals.csv', 'predicted.csv', 'forecasted_data.csv']:
+                if set(REQUIRED_COLUMNS).issubset(df.columns):
+                    df = df[REQUIRED_COLUMNS]  # Reorder columns
+                    logger.info(f"Reordered columns for {description} to match REQUIRED_COLUMNS")
+                else:
+                    missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
+                    logger.warning(f"Cannot reorder {description} - missing columns: {missing_cols}")
                 
             filepath = os.path.join(DATA_UPLOAD, filename)
             df.to_csv(filepath, index=False, date_format='%Y-%m-%d')
@@ -460,7 +468,6 @@ def save_dataframes(df_actuals: pd.DataFrame, df_predicted: pd.DataFrame,
             all_successful = False
     
     return all_successful
-
 
 def main() -> None:
     """
