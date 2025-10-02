@@ -121,25 +121,27 @@ jobs:
           echo "✗ Model metrics missing"
         fi
         
-    - name: Install Azure Storage dependencies
+    - name: Install SharePoint upload dependencies
       if: success()
       run: |
-        pip install azure-storage-blob
+        pip install requests
         
-    - name: Upload CSV files to Azure Blob Storage
+    - name: Upload CSV files to SharePoint
       if: success()
       env:
-        AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
-        AZURE_CONTAINER_NAME: ${{ secrets.AZURE_CONTAINER_NAME }}
+        SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
+        SHAREPOINT_USERNAME: ${{ secrets.SHAREPOINT_USERNAME }}
+        SHAREPOINT_PASSWORD: ${{ secrets.SHAREPOINT_PASSWORD }}
+        SHAREPOINT_FOLDER_PATH: ${{ secrets.SHAREPOINT_FOLDER_PATH }}
       run: |
         cd src
-        python daily_blob_uploader.py
+        python daily_sharepoint_uploader.py
         
-    - name: Blob upload summary
+    - name: SharePoint upload summary
       if: success()
       run: |
-        echo "✓ CSV files successfully uploaded to Azure Blob Storage"
-        echo "Container: ${{ secrets.AZURE_CONTAINER_NAME }}"
+        echo "✓ CSV files successfully uploaded to SharePoint"
+        echo "Site: ${{ secrets.SHAREPOINT_SITE_URL }}"
         echo "Upload timestamp: $(date -u)"
         
     - name: Summary

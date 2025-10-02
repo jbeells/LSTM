@@ -159,7 +159,7 @@ if __name__ == "__main__":
     pred_dates = df_data['Date'].iloc[SEQ_LEN:].reset_index(drop=True)
     pred_df = pd.DataFrame(preds, columns=numeric_data.columns)
     pred_df.insert(0, 'Date', pred_dates)
-    pred_df.to_csv(os.path.join(DATA_OUTPUT, 'predicted.csv'), index=False, date_format='%Y-%m-%d')
+    pred_df.to_csv(os.path.join(DATA_OUTPUT, 'predicts.csv'), index=False, date_format='%Y-%m-%d')
 
     # Forecast n_days ahead
     n_days = 30
@@ -168,7 +168,7 @@ if __name__ == "__main__":
 
     forecasts = forecast_n_days(model, scaler, df_data, n_days)
     forecast_df = pd.DataFrame(forecasts, columns=numeric_data.columns, index=future_dates)
-    forecast_df.reset_index().rename(columns={'index': 'Date'}).to_csv(os.path.join(DATA_OUTPUT, 'forecasted_data.csv'), index=False, date_format='%Y-%m-%d')
+    forecast_df.reset_index().rename(columns={'index': 'Date'}).to_csv(os.path.join(DATA_OUTPUT, 'forecasts.csv'), index=False, date_format='%Y-%m-%d')
 
     # Save model and scaler
     model.save(os.path.join(MODEL_OUTPUT, 'lstm_model.keras'))

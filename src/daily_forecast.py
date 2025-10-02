@@ -436,8 +436,8 @@ def save_dataframes(df_actuals: pd.DataFrame, df_predicted: pd.DataFrame,
     
     save_operations = [
         (df_actuals, 'actuals.csv', 'Recent year actuals'),
-        (df_predicted, 'predicted.csv', 'Recent year predictions'),  
-        (df_forecast, 'forecasted_data.csv', '30-day forecast'),
+        (df_predicted, 'predicts.csv', 'Recent year predictions'),  
+        (df_forecast, 'forecasts.csv', '30-day forecast'),
         (df_metrics, 'model_metrics.csv', 'Model performance metrics')
     ]
     
@@ -451,7 +451,7 @@ def save_dataframes(df_actuals: pd.DataFrame, df_predicted: pd.DataFrame,
                 continue
             
             # Reorder columns to match REQUIRED_COLUMNS if this is one of the main dataframes
-            if filename in ['actuals.csv', 'predicted.csv', 'forecasted_data.csv']:
+            if filename in ['actuals.csv', 'predicts.csv', 'forecasts.csv']:
                 if set(REQUIRED_COLUMNS).issubset(df.columns):
                     df = df[REQUIRED_COLUMNS]  # Reorder columns
                     logger.info(f"Reordered columns for {description} to match REQUIRED_COLUMNS")
