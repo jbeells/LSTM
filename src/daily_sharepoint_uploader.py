@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-SharePoint CSV Uploader Script
-==============================
+SharePoint CSV Uploader Script - App Registration Version
+========================================================
 
-Uploads CSV files from data/upload to SharePoint document library, overwriting existing files.
-Uses SharePoint Online token-based authentication for better compatibility.
+Uploads CSV files from data/upload to SharePoint document library using App Registration.
+This method works with modern SharePoint Online authentication requirements.
 """
 
 import os
@@ -13,165 +13,96 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import requests
-from requests.auth import HTTPBasicAuth
 from requests.exceptions import RequestException
 import json
 import urllib.parse
 
-# Setup logging to match your existing pattern
+# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-def get_sharepoint_access_token():
-    """Get SharePoint access token using legacy authentication"""
-    username = os.getenv('SHAREPOINT_USERNAME')
-    password = os.getenv('SHAREPOINT_PASSWORD')
+def get_access_token():
+    """Get access token using App Registration (Client Credentials Flow)"""
+    tenant_id = os.getenv('SHAREPOINT_TENANT_ID')
+    client_id = os.getenv('SHAREPOINT_CLIENT_ID')
+    client_secret = os.getenv('SHAREPOINT_CLIENT_SECRET')
+    
+    if not all([tenant_id, client_id, client_secret]):
+        raise ValueError("Missing required app registration credentials: SHAREPOINT_TENANT_ID, SHAREPOINT_CLIENT_ID, SHAREPOINT_CLIENT_SECRET")
+    
+    # Microsoft Graph token endpoint
+    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    
+    # Get SharePoint resource from site URL
     site_url = os.getenv('SHAREPOINT_SITE_URL')
+    if not site_url:
+        raise ValueError("Missing SHAREPOINT_SITE_URL")
     
-    if not all([username, password, site_url]):
-        raise ValueError("Missing required SharePoint credentials")
-    
-    # Parse tenant from site URL
+    # Extract tenant domain from SharePoint URL
     from urllib.parse import urlparse
     parsed_url = urlparse(site_url)
-    tenant_name = parsed_url.hostname.split('.')[0]
+    sharepoint_resource = f"https://{parsed_url.hostname}"
     
-    # SharePoint Online legacy authentication endpoint
-    auth_url = f"https://login.microsoftonline.com/common/oauth2/token"
-    
-    # Try SAML authentication first
-    try:
-        return get_saml_token(site_url, username, password)
-    except Exception as e:
-        logger.warning(f"SAML auth failed: {e}")
-        # Fallback to basic auth with better headers
-        return get_basic_auth_session(username, password)
-
-def get_saml_token(site_url, username, password):
-    """Get SAML token for SharePoint authentication"""
-    # SAML request template
-    saml_template = """<?xml version="1.0" encoding="UTF-8"?>
-    <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://www.w3.org/2005/08/addressing" xmlns:u="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
-        <s:Header>
-            <a:Action s:mustUnderstand="1">http://schemas.xmlsoap.org/ws/2005/02/trust/RST/Issue</a:Action>
-            <a:ReplyTo><a:Address>http://www.w3.org/2005/08/addressing/anonymous</a:Address></a:ReplyTo>
-            <a:To s:mustUnderstand="1">https://login.microsoftonline.com/extSTS.srf</a:To>
-            <o:Security s:mustUnderstand="1" xmlns:o="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
-                <o:UsernameToken><o:Username>{username}</o:Username><o:Password>{password}</o:Password></o:UsernameToken>
-            </o:Security>
-        </s:Header>
-        <s:Body>
-            <t:RequestSecurityToken xmlns:t="http://schemas.xmlsoap.org/ws/2005/02/trust">
-                <wsp:AppliesTo xmlns:wsp="http://schemas.xmlsoap.org/ws/2004/09/policy">
-                    <a:EndpointReference><a:Address>{site_url}</a:Address></a:EndpointReference>
-                </wsp:AppliesTo>
-                <t:KeyType>http://schemas.xmlsoap.org/ws/2005/05/identity/NoProofKey</t:KeyType>
-                <t:RequestType>http://schemas.xmlsoap.org/ws/2005/02/trust/Issue</t:RequestType>
-                <t:TokenType>urn:oasis:names:tc:SAML:1.0:assertion</t:TokenType>
-            </t:RequestSecurityToken>
-        </s:Body>
-    </s:Envelope>"""
-    
-    saml_request = saml_template.format(
-        username=username,
-        password=password,
-        site_url=site_url
-    )
-    
-    headers = {
-        'Content-Type': 'application/soap+xml; charset=utf-8',
-        'SOAPAction': 'http://schemas.xmlsoap.org/ws/2005/02/trust/RST/Issue'
+    token_data = {
+        'grant_type': 'client_credentials',
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'scope': f'{sharepoint_resource}/.default'
     }
     
-    response = requests.post(
-        'https://login.microsoftonline.com/extSTS.srf',
-        data=saml_request,
-        headers=headers
-    )
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded'
+    }
     
-    if response.status_code == 200:
-        # Extract token from response (simplified)
-        # In a real implementation, you'd parse the XML response
-        logger.info("SAML authentication successful")
-        return create_session_with_saml_token(response.text, site_url)
-    else:
-        raise Exception(f"SAML authentication failed: {response.status_code}")
+    try:
+        response = requests.post(token_url, data=token_data, headers=headers)
+        response.raise_for_status()
+        
+        token_info = response.json()
+        access_token = token_info['access_token']
+        
+        logger.info("Successfully obtained access token")
+        return access_token
+        
+    except RequestException as e:
+        logger.error(f"Failed to get access token: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            logger.error(f"Response status: {e.response.status_code}")
+            logger.error(f"Response text: {e.response.text}")
+        raise
 
-def get_basic_auth_session(username, password):
-    """Create session with enhanced basic authentication"""
-    session = requests.Session()
-    session.auth = HTTPBasicAuth(username, password)
-    
-    # Add headers that might help with SharePoint Online
-    session.headers.update({
-        'Accept': 'application/json;odata=verbose',
-        'Content-Type': 'application/json;odata=verbose',
-        'User-Agent': 'Python SharePoint Client 1.0',
-        'X-RequestForceAuthentication': 'true',
-        'Authorization': f'Basic {requests.auth._basic_auth_str(username, password)}'
-    })
-    
-    return session
-
-def create_session_with_saml_token(saml_response, site_url):
-    """Create session using SAML token (simplified implementation)"""
+def create_authenticated_session(access_token):
+    """Create requests session with Bearer token authentication"""
     session = requests.Session()
     session.headers.update({
+        'Authorization': f'Bearer {access_token}',
         'Accept': 'application/json;odata=verbose',
-        'Content-Type': 'application/json;odata=verbose',
-        'User-Agent': 'Python SharePoint Client 1.0'
+        'Content-Type': 'application/json;odata=verbose'
     })
     return session
 
 def get_form_digest(session, site_url):
-    """Get form digest value required for SharePoint POST operations"""
+    """Get form digest value for SharePoint POST operations"""
     try:
         digest_url = f"{site_url}/_api/contextinfo"
         
-        # Try with different headers
-        headers = {
-            'Accept': 'application/json;odata=verbose',
-            'Content-Type': 'application/json;odata=verbose',
-            'X-RequestForceAuthentication': 'true'
-        }
-        
-        response = session.post(digest_url, headers=headers)
-        
-        # Log more details for debugging
-        logger.info(f"Form digest request status: {response.status_code}")
-        logger.info(f"Response headers: {dict(response.headers)}")
-        
-        if response.status_code == 401:
-            logger.error("Authentication failed - check credentials")
-            logger.error("Possible issues:")
-            logger.error("1. Modern Authentication may be required")
-            logger.error("2. Multi-Factor Authentication is enabled")
-            logger.error("3. Legacy authentication is disabled")
-            raise Exception("Authentication failed - credentials may be invalid or MFA required")
-        
+        response = session.post(digest_url)
         response.raise_for_status()
         
         digest_data = response.json()
-        return digest_data['d']['GetContextWebInformation']['FormDigestValue']
-    
+        form_digest = digest_data['d']['GetContextWebInformation']['FormDigestValue']
+        
+        logger.info("Successfully obtained form digest")
+        return form_digest
+        
     except RequestException as e:
         logger.error(f"Failed to get form digest: {e}")
         if hasattr(e, 'response') and e.response is not None:
             logger.error(f"Response status: {e.response.status_code}")
             logger.error(f"Response text: {e.response.text}")
-            
-            if e.response.status_code == 403:
-                logger.error("SharePoint access forbidden. This usually means:")
-                logger.error("1. User doesn't have proper permissions")
-                logger.error("2. Site URL is incorrect")
-                logger.error("3. Modern Authentication is required (App Registration needed)")
-                logger.error("4. Legacy authentication is disabled on this tenant")
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get form digest: {e}")
         raise
 
 def upload_file_to_sharepoint(session, site_url, folder_path, file_path, form_digest):
@@ -189,16 +120,18 @@ def upload_file_to_sharepoint(session, site_url, folder_path, file_path, form_di
         # SharePoint REST API endpoint for file upload
         upload_url = f"{site_url}/_api/web/GetFolderByServerRelativeUrl('{encoded_folder_path}')/Files/add(url='{file_name}',overwrite=true)"
         
-        # Headers for file upload
-        headers = {
+        # Create new session for file upload with different headers
+        upload_session = requests.Session()
+        upload_session.headers.update({
+            'Authorization': session.headers['Authorization'],  # Keep the Bearer token
             'Accept': 'application/json;odata=verbose',
             'X-RequestDigest': form_digest,
             'Content-Type': 'application/octet-stream'
-        }
+        })
         
-        logger.info(f"Uploading {file_name} to {upload_url}")
+        logger.info(f"Uploading {file_name} ({len(file_content)} bytes)")
         
-        response = session.post(upload_url, data=file_content, headers=headers)
+        response = upload_session.post(upload_url, data=file_content)
         response.raise_for_status()
         
         logger.info(f"Successfully uploaded {file_name} to SharePoint")
@@ -209,10 +142,33 @@ def upload_file_to_sharepoint(session, site_url, folder_path, file_path, form_di
         if hasattr(e, 'response') and e.response is not None:
             logger.error(f"Response status: {e.response.status_code}")
             logger.error(f"Response text: {e.response.text}")
+            
+            if e.response.status_code == 404:
+                logger.error("Folder not found. Please check the SHAREPOINT_FOLDER_PATH")
+            elif e.response.status_code == 403:
+                logger.error("Access denied. Check app permissions in SharePoint")
         raise
+
+def test_folder_access(session, site_url, folder_path):
+    """Test if the target folder exists and is accessible"""
+    try:
+        encoded_folder_path = urllib.parse.quote(folder_path, safe='/')
+        test_url = f"{site_url}/_api/web/GetFolderByServerRelativeUrl('{encoded_folder_path}')"
+        
+        response = session.get(test_url)
+        if response.status_code == 200:
+            logger.info(f"✓ Folder exists and is accessible: {folder_path}")
+            return True
+        elif response.status_code == 404:
+            logger.error(f"✗ Folder not found: {folder_path}")
+            return False
+        else:
+            logger.warning(f"Folder access test returned status {response.status_code}")
+            return True  # Proceed anyway
+            
     except Exception as e:
-        logger.error(f"Failed to upload {file_path.name}: {e}")
-        raise
+        logger.warning(f"Could not test folder access: {e}")
+        return True  # Proceed anyway
 
 def upload_csv_files():
     """Upload all CSV files from data/upload to SharePoint"""
@@ -220,7 +176,7 @@ def upload_csv_files():
     try:
         # Get SharePoint configuration from environment
         site_url = os.getenv('SHAREPOINT_SITE_URL')
-        folder_path = os.getenv('SHAREPOINT_FOLDER_PATH', '/sites/LSTM/Shared Documents')
+        folder_path = os.getenv('SHAREPOINT_FOLDER_PATH', '/Shared Documents')
         
         if not site_url:
             raise ValueError("Missing SHAREPOINT_SITE_URL in environment variables")
@@ -228,10 +184,14 @@ def upload_csv_files():
         logger.info(f"Connecting to SharePoint site: {site_url}")
         logger.info(f"Target folder: {folder_path}")
         
-        # Initialize SharePoint session
-        session = get_sharepoint_access_token()
+        # Get access token and create authenticated session
+        access_token = get_access_token()
+        session = create_authenticated_session(access_token)
         
-        # Get form digest for authentication
+        # Test folder access
+        test_folder_access(session, site_url, folder_path)
+        
+        # Get form digest for uploads
         form_digest = get_form_digest(session, site_url)
         
         # Path to upload directory
@@ -249,25 +209,38 @@ def upload_csv_files():
         
         logger.info(f"Found {len(csv_files)} CSV files to upload")
         
-        # Upload each file (this will overwrite existing files)
+        # Upload each file
+        success_count = 0
         for csv_file in csv_files:
             try:
                 upload_file_to_sharepoint(session, site_url, folder_path, csv_file, form_digest)
+                success_count += 1
                 
             except Exception as e:
                 logger.error(f"Failed to upload {csv_file.name}: {e}")
-                raise
+                # Continue with other files rather than stopping completely
+                continue
         
-        logger.info(f"Successfully uploaded {len(csv_files)} files to SharePoint")
-        return True
+        if success_count == len(csv_files):
+            logger.info(f"Successfully uploaded all {success_count} files to SharePoint")
+            return True
+        elif success_count > 0:
+            logger.warning(f"Uploaded {success_count} out of {len(csv_files)} files")
+            return True
+        else:
+            logger.error("Failed to upload any files")
+            return False
         
     except Exception as e:
         logger.error(f"SharePoint upload process failed: {e}")
-        logger.error("Troubleshooting suggestions:")
-        logger.error("1. Verify SharePoint site URL is correct")
-        logger.error("2. Check user has edit permissions on the target folder")
-        logger.error("3. Consider using App Registration instead of user credentials")
-        logger.error("4. Verify folder path exists in SharePoint")
+        logger.error("Setup instructions:")
+        logger.error("1. Create an App Registration in Azure AD")
+        logger.error("2. Grant Sites.ReadWrite.All permissions")
+        logger.error("3. Add the app to your SharePoint site with edit permissions")
+        logger.error("4. Set the required environment variables:")
+        logger.error("   - SHAREPOINT_TENANT_ID")
+        logger.error("   - SHAREPOINT_CLIENT_ID") 
+        logger.error("   - SHAREPOINT_CLIENT_SECRET")
         return False
 
 if __name__ == "__main__":

@@ -130,9 +130,10 @@ jobs:
       if: success()
       env:
         SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
-        SHAREPOINT_USERNAME: ${{ secrets.SHAREPOINT_USERNAME }}
-        SHAREPOINT_PASSWORD: ${{ secrets.SHAREPOINT_PASSWORD }}
         SHAREPOINT_FOLDER_PATH: ${{ secrets.SHAREPOINT_FOLDER_PATH }}
+        SHAREPOINT_TENANT_ID: ${{ secrets.SHAREPOINT_TENANT_ID }}
+        SHAREPOINT_CLIENT_ID: ${{ secrets.SHAREPOINT_CLIENT_ID }}
+        SHAREPOINT_CLIENT_SECRET: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
       run: |
         cd src
         python daily_sharepoint_uploader.py
