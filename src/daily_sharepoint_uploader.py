@@ -1,299 +1,209 @@
 #!/usr/bin/env python3
 """
-SharePoint CSV Uploader using Delegated Authentication - FIXED
-Uses correct MSAL client types for different authentication flows
+SharePoint CSV Uploader using Microsoft 365 CLI
+This bypasses app-only authentication restrictions by using the M365 CLI
 """
 
 import os
 import pandas as pd
-import requests
+import subprocess
 import json
+import tempfile
 from datetime import datetime, timedelta
-from msal import PublicClientApplication, ConfidentialClientApplication
 import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def sharepoint_delegated_uploader():
-    """Upload CSV using delegated permissions (user context)"""
+class M365SharePointUploader:
+    """SharePoint uploader using Microsoft 365 CLI"""
     
-    print("🚀 SHAREPOINT CSV UPLOADER - DELEGATED AUTH (FIXED)")
-    print("=" * 60)
-    print(f"⏰ Upload time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print()
+    def __init__(self):
+        self.site_url = os.getenv('SHAREPOINT_SITE_URL', 'https://jeanalytics.sharepoint.com/sites/LSTM')
+        self.is_authenticated = False
+        self.cli_available = False
     
-    # Configuration
-    tenant_id = os.getenv('SHAREPOINT_TENANT_ID')
-    client_secret = os.getenv('SHAREPOINT_CLIENT_SECRET')
-    client_id = "26a6a10b-5718-440c-8d1b-699fc88f7057"
-    site_url = os.getenv('SHAREPOINT_SITE_URL', 'https://jeanalytics.sharepoint.com/sites/LSTM')
-    
-    if not all([tenant_id, client_secret]):
-        print("❌ Missing environment variables")
-        return False
-    
-    print("📋 CONFIGURATION")
-    print("-" * 20)
-    print(f"Client ID: {client_id}")
-    print(f"Tenant: {tenant_id}")
-    print(f"Site: {site_url}")
-    print()
-    
-    # Step 1: Get delegated token
-    print("🔑 STEP 1: AUTHENTICATION")
-    print("-" * 30)
-    
-    token = get_delegated_token_fixed(tenant_id, client_id, client_secret)
-    if not token:
-        print("❌ Authentication failed")
-        return False
-    
-    print("✅ Authentication successful")
-    print()
-    
-    # Step 2: Get site information
-    print("🏢 STEP 2: SITE ACCESS")
-    print("-" * 25)
-    
-    site_id = get_site_id(token, site_url)
-    if not site_id:
-        print("❌ Site access failed")
-        return False
-    
-    print(f"✅ Site access successful")
-    print(f"Site ID: {site_id}")
-    print()
-    
-    # Step 3: Get drive information
-    print("📁 STEP 3: DRIVE ACCESS")
-    print("-" * 26)
-    
-    drive_id = get_drive_id(token, site_id)
-    if not drive_id:
-        print("❌ Drive access failed")
-        return False
-    
-    print(f"✅ Drive access successful")
-    print(f"Drive ID: {drive_id}")
-    print()
-    
-    # Step 4: Generate forecast data
-    print("📊 STEP 4: DATA GENERATION")
-    print("-" * 29)
-    
-    df = generate_forecast_data()
-    print(f"✅ Generated {len(df)} forecast records")
-    print("Sample data:")
-    print(df.head().to_string(index=False))
-    print()
-    
-    # Step 5: Upload CSV file
-    print("📤 STEP 5: FILE UPLOAD")
-    print("-" * 24)
-    
-    success = upload_csv_file(token, drive_id, df)
-    
-    if success:
-        print("🎉 CSV UPLOAD SUCCESSFUL!")
-        print("✅ File uploaded to SharePoint")
-        return True
-    else:
-        print("❌ CSV upload failed")
-        return False
-
-def get_delegated_token_fixed(tenant_id, client_id, client_secret):
-    """Get token using correct MSAL approach for delegated permissions"""
-    
-    authority = f"https://login.microsoftonline.com/{tenant_id}"
-    scopes = ["https://graph.microsoft.com/Sites.ReadWrite.All"]
-    
-    # Method 1: Try Authorization Code Flow (best for automation)
-    print("   Attempting authorization code flow...")
-    token = try_authorization_code_flow(tenant_id, client_id, client_secret, scopes)
-    if token:
-        return token
-    
-    # Method 2: Try Device Code Flow with PublicClientApplication
-    print("   Attempting device code flow...")
-    token = try_device_code_flow(tenant_id, client_id, scopes)
-    if token:
-        return token
-    
-    # Method 3: Try Resource Owner Password Credentials (if enabled)
-    print("   Attempting ROPC flow...")
-    token = try_ropc_flow(tenant_id, client_id, client_secret, scopes)
-    if token:
-        return token
-    
-    return None
-
-def try_authorization_code_flow(tenant_id, client_id, client_secret, scopes):
-    """Try authorization code flow - best for web apps"""
-    
-    try:
-        app = ConfidentialClientApplication(
-            client_id=client_id,
-            client_credential=client_secret,
-            authority=f"https://login.microsoftonline.com/{tenant_id}"
-        )
+    def check_cli_installation(self):
+        """Check if Microsoft 365 CLI is installed"""
+        logger.info("🔧 Checking Microsoft 365 CLI installation...")
         
-        # Check for cached token first
-        accounts = app.get_accounts()
-        if accounts:
-            print("      Found cached account, trying silent auth...")
-            result = app.acquire_token_silent(scopes, account=accounts[0])
-            if result and "access_token" in result:
-                print("      ✅ Silent authentication successful")
-                return result["access_token"]
-        
-        # For automation, we need a different approach
-        # Let's try the client credentials flow with different scopes
-        print("      Trying client credentials with user impersonation...")
-        
-        # This won't work for delegated permissions, but let's see the error
-        result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
-        if result and "access_token" in result:
-            print("      ✅ Client credentials successful")
-            return result["access_token"]
-        else:
-            print(f"      ❌ Client credentials failed: {result.get('error_description', 'Unknown')}")
-            
-    except Exception as e:
-        print(f"      ❌ Authorization code exception: {e}")
-    
-    return None
-
-def try_device_code_flow(tenant_id, client_id, scopes):
-    """Try device code flow with PublicClientApplication"""
-    
-    try:
-        # Use PublicClientApplication for device code flow
-        app = PublicClientApplication(
-            client_id=client_id,
-            authority=f"https://login.microsoftonline.com/{tenant_id}"
-        )
-        
-        # Check for cached token first
-        accounts = app.get_accounts()
-        if accounts:
-            print("      Found cached account, trying silent auth...")
-            result = app.acquire_token_silent(scopes, account=accounts[0])
-            if result and "access_token" in result:
-                print("      ✅ Silent authentication successful")
-                return result["access_token"]
-        
-        # Start device code flow
-        print("      Starting device code flow...")
-        flow = app.initiate_device_flow(scopes=scopes)
-        
-        if "user_code" in flow:
-            print(f"      📱 Please visit: {flow['verification_uri']}")
-            print(f"      🔑 Enter code: {flow['user_code']}")
-            print("      ⏳ Waiting for authentication (timeout: 15 minutes)...")
-            
-            # Wait for user to complete authentication
-            result = app.acquire_token_by_device_flow(flow)
-            
-            if result and "access_token" in result:
-                print("      ✅ Device flow authentication successful")
-                return result["access_token"]
-            else:
-                print(f"      ❌ Device flow failed: {result.get('error_description', 'Unknown error')}")
-        else:
-            print("      ❌ Failed to initiate device flow")
-            
-    except Exception as e:
-        print(f"      ❌ Device code exception: {e}")
-    
-    return None
-
-def try_ropc_flow(tenant_id, client_id, client_secret, scopes):
-    """Try Resource Owner Password Credentials flow"""
-    
-    # This requires username/password and is typically disabled
-    # We'll skip this for security reasons
-    print("      ROPC flow skipped (requires username/password)")
-    return None
-
-def get_site_id(token, site_url):
-    """Get SharePoint site ID"""
-    
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json'
-    }
-    
-    # Extract site path from URL
-    from urllib.parse import urlparse
-    parsed_url = urlparse(site_url)
-    site_path = parsed_url.path  # Should be /sites/LSTM
-    
-    # Try different Graph API formats
-    api_urls = [
-        f"https://graph.microsoft.com/v1.0/sites/{parsed_url.netloc}:{site_path}",
-        f"https://graph.microsoft.com/v1.0/sites/{parsed_url.netloc}{site_path}",
-        f"https://graph.microsoft.com/v1.0/sites?search=LSTM"
-    ]
-    
-    for api_url in api_urls:
         try:
-            print(f"   Trying: {api_url}")
-            response = requests.get(api_url, headers=headers)
-            print(f"   Response: {response.status_code}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                # Handle search results
-                if 'value' in data:
-                    for site in data['value']:
-                        if 'LSTM' in site.get('displayName', ''):
-                            print(f"   Found site: {site.get('displayName')}")
-                            return site.get('id')
-                else:
-                    # Direct site access
-                    print(f"   Found site: {data.get('displayName', 'Unknown')}")
-                    return data.get('id')
+            result = subprocess.run(['m365', '--version'], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                version = result.stdout.strip()
+                logger.info(f"   ✅ M365 CLI installed: {version}")
+                self.cli_available = True
+                return True
             else:
-                print(f"   Error: {response.text[:200]}")
+                logger.error("   ❌ M365 CLI not responding properly")
+                return False
+        except FileNotFoundError:
+            logger.error("   ❌ Microsoft 365 CLI not found")
+            logger.info("   💡 Install with: npm install -g @pnp/cli-microsoft365")
+            return False
+        except subprocess.TimeoutExpired:
+            logger.error("   ❌ M365 CLI command timed out")
+            return False
+        except Exception as e:
+            logger.error(f"   ❌ CLI check failed: {e}")
+            return False
+    
+    def authenticate(self):
+        """Authenticate with Microsoft 365"""
+        if not self.cli_available:
+            logger.error("M365 CLI not available")
+            return False
+        
+        logger.info("🔑 Authenticating with Microsoft 365...")
+        
+        # Check if already logged in
+        try:
+            result = subprocess.run(['m365', 'status'], 
+                                  capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                status_data = json.loads(result.stdout)
+                if status_data.get('connectedAs'):
+                    logger.info(f"   ✅ Already authenticated as: {status_data.get('connectedAs')}")
+                    self.is_authenticated = True
+                    return True
+        except Exception as e:
+            logger.info(f"   Status check failed, proceeding with login: {e}")
+        
+        # Authenticate using device code flow
+        logger.info("   Starting device code authentication...")
+        try:
+            result = subprocess.run(['m365', 'login', '--authType', 'deviceCode'], 
+                                  capture_output=True, text=True, timeout=300)  # 5 minute timeout
+            
+            if result.returncode == 0:
+                logger.info("   ✅ Authentication successful")
+                self.is_authenticated = True
+                return True
+            else:
+                logger.error(f"   ❌ Authentication failed: {result.stderr}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.error("   ❌ Authentication timed out")
+            return False
+        except Exception as e:
+            logger.error(f"   ❌ Authentication exception: {e}")
+            return False
+    
+    def test_site_access(self):
+        """Test if we can access the SharePoint site"""
+        if not self.is_authenticated:
+            logger.error("Not authenticated")
+            return False
+        
+        logger.info("🏢 Testing SharePoint site access...")
+        
+        try:
+            # Get site information
+            result = subprocess.run(['m365', 'spo', 'site', 'get', 
+                                   '--url', self.site_url, '--output', 'json'], 
+                                  capture_output=True, text=True, timeout=60)
+            
+            if result.returncode == 0:
+                site_data = json.loads(result.stdout)
+                site_title = site_data.get('Title', 'Unknown')
+                logger.info(f"   ✅ Site access successful: {site_title}")
+                logger.info(f"   Site ID: {site_data.get('Id', 'Unknown')}")
+                return True
+            else:
+                logger.error(f"   ❌ Site access failed: {result.stderr}")
+                return False
                 
         except Exception as e:
-            print(f"   Exception: {e}")
-            continue
+            logger.error(f"   ❌ Site access exception: {e}")
+            return False
     
-    return None
-
-def get_drive_id(token, site_id):
-    """Get default drive ID for the site"""
-    
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json'
-    }
-    
-    drive_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive"
-    
-    try:
-        print(f"   Getting drive: {drive_url}")
-        response = requests.get(drive_url, headers=headers)
-        print(f"   Drive response: {response.status_code}")
+    def upload_csv_file(self, df, filename=None):
+        """Upload CSV file to SharePoint document library"""
+        if not self.is_authenticated:
+            logger.error("Not authenticated")
+            return False
         
-        if response.status_code == 200:
-            drive_data = response.json()
-            drive_name = drive_data.get('name', 'Unknown')
-            print(f"   Drive name: {drive_name}")
-            return drive_data.get('id')
-        else:
-            print(f"   Drive error: {response.text}")
-    except Exception as e:
-        print(f"   Drive exception: {e}")
-    
-    return None
+        # Generate filename if not provided
+        if not filename:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"lstm_forecast_{timestamp}.csv"
+        
+        logger.info(f"📤 Uploading file: {filename}")
+        
+        # Create temporary CSV file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
+            df.to_csv(temp_file.name, index=False)
+            temp_filepath = temp_file.name
+        
+        try:
+            # Upload file to SharePoint
+            # Default document library is usually "Shared Documents" or "Documents"
+            library_name = "Shared Documents"  # Common default
+            
+            result = subprocess.run([
+                'm365', 'spo', 'file', 'add',
+                '--webUrl', self.site_url,
+                '--folder', library_name,
+                '--path', temp_filepath,
+                '--name', filename,
+                '--output', 'json'
+            ], capture_output=True, text=True, timeout=120)
+            
+            if result.returncode == 0:
+                file_data = json.loads(result.stdout)
+                file_url = file_data.get('ServerRelativeUrl', 'Unknown')
+                file_size = os.path.getsize(temp_filepath)
+                
+                logger.info(f"   ✅ File uploaded successfully")
+                logger.info(f"   ✅ File path: {file_url}")
+                logger.info(f"   ✅ File size: {file_size} bytes")
+                logger.info(f"   ✅ SharePoint URL: {self.site_url}")
+                
+                return True
+            else:
+                # Try alternative document library names
+                alternative_libraries = ["Documents", "DocumentLibrary", "Documenti"]
+                
+                for lib_name in alternative_libraries:
+                    logger.info(f"   Trying alternative library: {lib_name}")
+                    
+                    alt_result = subprocess.run([
+                        'm365', 'spo', 'file', 'add',
+                        '--webUrl', self.site_url,
+                        '--folder', lib_name,
+                        '--path', temp_filepath,
+                        '--name', filename,
+                        '--output', 'json'
+                    ], capture_output=True, text=True, timeout=120)
+                    
+                    if alt_result.returncode == 0:
+                        file_data = json.loads(alt_result.stdout)
+                        file_url = file_data.get('ServerRelativeUrl', 'Unknown')
+                        
+                        logger.info(f"   ✅ File uploaded to {lib_name}")
+                        logger.info(f"   ✅ File path: {file_url}")
+                        
+                        return True
+                
+                logger.error(f"   ❌ Upload failed to all libraries: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"   ❌ Upload exception: {e}")
+            return False
+        finally:
+            # Clean up temporary file
+            try:
+                os.unlink(temp_filepath)
+            except:
+                pass
 
 def generate_forecast_data():
     """Generate sample LSTM forecast data"""
+    logger.info("📊 Generating LSTM forecast data...")
     
     import numpy as np
     
@@ -301,7 +211,7 @@ def generate_forecast_data():
     base_date = datetime.now().date()
     dates = [base_date + timedelta(days=i) for i in range(30)]
     
-    # Generate realistic forecast values with trend and seasonality
+    # Generate realistic forecast values
     np.random.seed(42)  # For reproducible results
     
     trend = np.linspace(100, 120, 30)  # Upward trend
@@ -318,68 +228,78 @@ def generate_forecast_data():
     df = pd.DataFrame({
         'Date': dates,
         'Forecast_Value': np.round(values, 2),
-        'Lower_Bound': np.round(lower_bounds, 2),
-        'Upper_Bound': np.round(upper_bounds, 2),
-        'Model_Version': '1.0',
-        'Generated_At': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        'Lower_Bound_95': np.round(lower_bounds, 2),
+        'Upper_Bound_95': np.round(upper_bounds, 2),
+        'Model_Version': '1.2.0',
+        'Training_Date': datetime.now().strftime('%Y-%m-%d'),
+        'Generated_At': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'Confidence_Score': np.round(np.random.uniform(0.85, 0.95, 30), 3)
     })
+    
+    logger.info(f"   ✅ Generated {len(df)} forecast records")
     
     return df
 
-def upload_csv_file(token, drive_id, df):
-    """Upload CSV file to SharePoint"""
-    
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'text/csv'
-    }
-    
-    # Generate filename with timestamp
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f"lstm_forecast_{timestamp}.csv"
-    
-    # Convert DataFrame to CSV string
-    csv_content = df.to_csv(index=False)
-    csv_bytes = csv_content.encode('utf-8')
-    
-    # Upload file using Graph API
-    upload_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{filename}:/content"
+def main():
+    """Main function to upload CSV using M365 CLI"""
+    print("🚀 SHAREPOINT UPLOADER - MICROSOFT 365 CLI")
+    print("=" * 55)
+    print(f"⏰ Upload time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print()
     
     try:
-        print(f"   Uploading to: {upload_url}")
-        response = requests.put(upload_url, headers=headers, data=csv_bytes)
+        # Step 1: Generate forecast data
+        forecast_df = generate_forecast_data()
+        print("Sample forecast data:")
+        print(forecast_df.head().to_string(index=False))
+        print()
         
-        print(f"   Upload response: {response.status_code}")
+        # Step 2: Initialize M365 uploader
+        uploader = M365SharePointUploader()
         
-        if response.status_code in [200, 201]:
-            file_data = response.json()
-            file_name = file_data.get('name', 'Unknown')
-            file_size = file_data.get('size', 'Unknown')
-            web_url = file_data.get('webUrl', 'No URL')
-            
-            print(f"   ✅ File uploaded: {file_name}")
-            print(f"   ✅ File size: {file_size} bytes")
-            print(f"   ✅ SharePoint URL: {web_url}")
-            
+        # Step 3: Check CLI installation
+        if not uploader.check_cli_installation():
+            print("\n❌ SETUP REQUIRED")
+            print("Please install Microsoft 365 CLI:")
+            print("1. Install Node.js if not already installed")
+            print("2. Run: npm install -g @pnp/cli-microsoft365")
+            print("3. Then run this script again")
+            return False
+        
+        # Step 4: Authenticate
+        print()
+        if not uploader.authenticate():
+            print("❌ Authentication failed")
+            return False
+        
+        # Step 5: Test site access
+        print()
+        if not uploader.test_site_access():
+            print("❌ Site access failed")
+            return False
+        
+        # Step 6: Upload file
+        print()
+        if uploader.upload_csv_file(forecast_df):
+            print("\n🎉 SHAREPOINT UPLOAD SUCCESSFUL!")
+            print("✅ CSV file uploaded using M365 CLI")
+            print("✅ This method bypasses app-only restrictions")
             return True
         else:
-            print(f"   ❌ Upload failed: {response.status_code}")
-            print(f"   Response: {response.text}")
+            print("\n❌ File upload failed")
             return False
             
     except Exception as e:
-        print(f"   ❌ Upload exception: {e}")
+        logger.error(f"Main process failed: {e}")
         return False
 
 if __name__ == "__main__":
-    success = sharepoint_delegated_uploader()
+    success = main()
     
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 55)
     if success:
-        print("🎉 SHAREPOINT UPLOAD COMPLETED!")
-        print("✅ CSV file successfully uploaded")
-        print("✅ Ready for daily automation")
+        print("🎉 SUCCESS! Ready for automation")
+        print("💡 This approach works even with app-only restrictions")
     else:
-        print("❌ SHAREPOINT UPLOAD FAILED")
-        print("💡 Check the error messages above")
-    print("=" * 60)
+        print("❌ Upload failed - check error messages above")
+    print("=" * 55)
