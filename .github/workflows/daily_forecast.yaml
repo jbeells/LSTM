@@ -35,18 +35,7 @@ jobs:
         pip install -r requirements.txt
         pip install requests-ntlm
         
-    - name: Verify project structure
-      run: |
-        echo "Project structure:"
-        ls -la
-        echo "Source directory:"
-        ls -la src/
-        echo "Models directory:"
-        ls -la models/
-        echo "Data directories:"
-        ls -la data/
-        
-    - name: Run daily forecast
+    - name: Run daily forecast with debug
       env:
         FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         EMAIL_USER: ${{ secrets.EMAIL_USER }}
@@ -59,63 +48,60 @@ jobs:
         FORCE_RUN: ${{ github.event.inputs.force_run || 'false' }}
       run: |
         cd src
+        echo "=== RUNNING DAILY FORECAST WITH DEBUG ==="
         python daily_forecast.py
+        echo "=== FORECAST SCRIPT COMPLETED ==="
+        echo "Exit code: $?"
         
-    - name: Upload forecast results
+    - name: Check what files were created
+      if: always()
+      run: |
+        echo "=== CHECKING ALL OUTPUT FILES ==="
+        echo "Contents of data/upload/:"
+        ls -la data/upload/ 2>/dev/null || echo "No data/upload directory found"
+        
+        echo "Contents of logs/:"
+        ls -la logs/ 2>/dev/null || echo "No logs directory found"
+        
+        echo "=== CHECKING EACH EXPECTED FILE ==="
+        for file in actuals.csv predicts.csv forecasts.csv model_metrics.csv; do
+          if [ -f "data/upload/$file" ]; then
+            echo "✓ Found: $file ($(wc -l < data/upload/$file) lines)"
+            echo "  First few lines:"
+            head -3 "data/upload/$file"
+            echo ""
+          else
+            echo "✗ Missing: $file"
+          fi
+        done
+        
+    - name: Show recent log output
+      if: always()
+      run: |
+        echo "=== RECENT LOG OUTPUT ==="
+        if [ -d logs ]; then
+          latest_log=$(ls -t logs/daily_forecast_*.log 2>/dev/null | head -1)
+          if [ -n "$latest_log" ]; then
+            echo "Latest log file: $latest_log"
+            echo "Last 50 lines of log:"
+            tail -50 "$latest_log"
+          else
+            echo "No daily forecast log files found"
+          fi
+        else
+          echo "No logs directory found"
+        fi
+        
+    - name: Upload all results for debugging
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: forecast-results-${{ github.run_number }}
+        name: debug-results-${{ github.run_number }}
         path: |
           data/upload/*.csv
           logs/*.log
-        retention-days: 30
+        retention-days: 7
         
-    - name: Upload logs on failure
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: forecast-failure-logs-${{ github.run_number }}
-        path: logs/
-        retention-days: 90
-        
-    - name: Check forecast outputs
-      if: success()
-      run: |
-        echo "Checking forecast outputs..."
-        
-        if [ -f data/upload/actuals.csv ]; then
-          echo "✓ Actuals data saved"
-          echo "Rows in actuals.csv: $(wc -l < data/upload/actuals.csv)"
-        else
-          echo "✗ Actuals data missing"
-        fi
-        
-        if [ -f data/upload/predicts.csv ]; then
-          echo "✓ Predictions data saved"
-          echo "Rows in predicts.csv: $(wc -l < data/upload/predicts.csv)"
-        else
-          echo "✗ Predictions data missing"
-        fi
-        
-        if [ -f data/upload/forecasts.csv ]; then
-          echo "✓ Forecast data saved"
-          echo "Rows in forecasts.csv: $(wc -l < data/upload/forecasts.csv)"
-        else
-          echo "✗ Forecast data missing"
-        fi
-        
-        if [ -f data/upload/model_metrics.csv ]; then
-          echo "✓ Model metrics saved"
-          echo "Metrics content:"
-          head -n 3 data/upload/model_metrics.csv
-        else
-          echo "✗ Model metrics missing"
-        fi
-        
-        echo "All files in data/upload:"
-        ls -la data/upload/
-    
     - name: Upload CSV files to SharePoint
       if: success()
       env:
@@ -126,27 +112,3 @@ jobs:
       run: |
         echo "Starting daily SharePoint upload..."
         python daily_sharepoint_uploader.py
-        
-    - name: SharePoint upload summary
-      if: success()
-      run: |
-        echo "==========================================="
-        echo "DAILY WORKFLOW COMPLETED SUCCESSFULLY"
-        echo "Forecast: Generated fresh daily data"
-        echo "Artifacts: Saved to GitHub Actions"
-        echo "SharePoint: CSV files uploaded"
-        echo "Next run: Tomorrow at 9:30 AM EST"
-        echo "Completed: $(date -u)"
-        echo "==========================================="
-        
-    - name: Summary
-      if: always()
-      run: |
-        echo "===== DAILY FORECAST WORKFLOW SUMMARY ====="
-        echo "Workflow: ${{ github.workflow }}"
-        echo "Run ID: ${{ github.run_id }}"
-        echo "Run Number: ${{ github.run_number }}"
-        echo "Triggered by: ${{ github.event_name }}"
-        echo "Status: ${{ job.status }}"
-        echo "Timestamp: $(date -u)"
-        echo "=============================================="
