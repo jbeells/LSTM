@@ -26,6 +26,7 @@ import json
 from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
+import urllib.parse
 
 # Setup logging
 def setup_logging():
@@ -66,11 +67,12 @@ class SharePointUploader:
         self.site_url = os.getenv('SHAREPOINT_SITE_URL', 'https://jeanalytics.sharepoint.com/sites/LSTM')
         self.folder_path = os.getenv('SHAREPOINT_FOLDER_PATH', 'Shared Documents')
         
-        # Extract site components
+        # Extract site components from URL
         if 'sharepoint.com' in self.site_url:
             # Parse SharePoint URL: https://tenant.sharepoint.com/sites/sitename
             url_parts = self.site_url.replace('https://', '').split('/')
             self.hostname = url_parts[0]  # tenant.sharepoint.com
+            self.site_path = '/'.join(url_parts[1:]) if len(url_parts) > 1 else ''  # sites/sitename
             self.site_name = url_parts[-1] if len(url_parts) > 2 else 'root'
         else:
             raise ValueError(f"Invalid SharePoint site URL: {self.site_url}")
@@ -83,6 +85,7 @@ class SharePointUploader:
         
         logger.info(f"SharePoint uploader initialized for site: {self.site_url}")
         logger.info(f"Target folder: {self.folder_path}")
+        logger.info(f"Site hostname: {self.hostname}, site path: {self.site_path}")
         
     def validate_config(self) -> bool:
         """Validate that all required configuration is present"""
@@ -137,38 +140,112 @@ class SharePointUploader:
                 logger.error(f"Response content: {e.response.text}")
             return False
             
-    def get_site_id(self) -> Optional[str]:
+    def get_site_id_multiple_methods(self) -> Optional[str]:
         """
-        Get SharePoint site ID using Graph API
+        Try multiple methods to get SharePoint site ID
         """
-        logger.info(f"Getting site ID for {self.hostname} and site {self.site_name}")
+        logger.info("Trying multiple methods to get site ID")
         
         headers = {
             'Authorization': f'Bearer {self.access_token}',
             'Content-Type': 'application/json'
         }
         
+        # Method 1: Direct site path approach
         try:
-            # Get site using hostname and site path
-            site_url = f"{self.graph_base_url}/sites/{self.hostname}:/sites/{self.site_name}"
+            logger.info("Method 1: Using direct site path")
+            site_url = f"{self.graph_base_url}/sites/{self.hostname}:/{self.site_path}"
+            logger.info(f"Trying URL: {site_url}")
+            
             response = requests.get(site_url, headers=headers)
-            response.raise_for_status()
-            
-            site_data = response.json()
-            site_id = site_data.get('id')
-            
-            if site_id:
-                logger.info(f"Successfully obtained site ID: {site_id}")
-                return site_id
+            if response.status_code == 200:
+                site_data = response.json()
+                site_id = site_data.get('id')
+                if site_id:
+                    logger.info(f"Method 1 successful - Site ID: {site_id}")
+                    return site_id
             else:
-                logger.error("Site ID not found in response")
-                return None
+                logger.warning(f"Method 1 failed with status {response.status_code}: {response.text}")
                 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to get site ID: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Response content: {e.response.text}")
-            return None
+        except Exception as e:
+            logger.warning(f"Method 1 failed with exception: {e}")
+        
+        # Method 2: Search for site by name
+        try:
+            logger.info("Method 2: Searching for site by name")
+            search_url = f"{self.graph_base_url}/sites?search={self.site_name}"
+            logger.info(f"Trying search URL: {search_url}")
+            
+            response = requests.get(search_url, headers=headers)
+            if response.status_code == 200:
+                search_data = response.json()
+                sites = search_data.get('value', [])
+                
+                for site in sites:
+                    if self.site_name.lower() in site.get('name', '').lower():
+                        site_id = site.get('id')
+                        if site_id:
+                            logger.info(f"Method 2 successful - Found site '{site.get('name')}' with ID: {site_id}")
+                            return site_id
+                            
+                logger.warning(f"Method 2: Site '{self.site_name}' not found in search results")
+                logger.info(f"Available sites: {[site.get('name') for site in sites]}")
+            else:
+                logger.warning(f"Method 2 failed with status {response.status_code}: {response.text}")
+                
+        except Exception as e:
+            logger.warning(f"Method 2 failed with exception: {e}")
+        
+        # Method 3: Try with URL encoding
+        try:
+            logger.info("Method 3: Using URL encoded path")
+            encoded_path = urllib.parse.quote(f"/{self.site_path}", safe='/')
+            site_url = f"{self.graph_base_url}/sites/{self.hostname}:{encoded_path}"
+            logger.info(f"Trying encoded URL: {site_url}")
+            
+            response = requests.get(site_url, headers=headers)
+            if response.status_code == 200:
+                site_data = response.json()
+                site_id = site_data.get('id')
+                if site_id:
+                    logger.info(f"Method 3 successful - Site ID: {site_id}")
+                    return site_id
+            else:
+                logger.warning(f"Method 3 failed with status {response.status_code}: {response.text}")
+                
+        except Exception as e:
+            logger.warning(f"Method 3 failed with exception: {e}")
+        
+        # Method 4: List all sites (for debugging)
+        try:
+            logger.info("Method 4: Listing all accessible sites for debugging")
+            sites_url = f"{self.graph_base_url}/sites?$top=50"
+            
+            response = requests.get(sites_url, headers=headers)
+            if response.status_code == 200:
+                sites_data = response.json()
+                sites = sites_data.get('value', [])
+                
+                logger.info(f"Found {len(sites)} accessible sites:")
+                for i, site in enumerate(sites[:10]):  # Show first 10 sites
+                    logger.info(f"  {i+1}. {site.get('name')} - {site.get('webUrl')} - ID: {site.get('id')}")
+                
+                # Try to find our site in the list
+                for site in sites:
+                    site_url_check = site.get('webUrl', '').lower()
+                    if 'lstm' in site_url_check or self.site_name.lower() in site.get('name', '').lower():
+                        site_id = site.get('id')
+                        logger.info(f"Method 4 - Found matching site: {site.get('name')} with ID: {site_id}")
+                        return site_id
+                        
+            else:
+                logger.warning(f"Method 4 failed with status {response.status_code}: {response.text}")
+                
+        except Exception as e:
+            logger.warning(f"Method 4 failed with exception: {e}")
+        
+        logger.error("All methods to get site ID failed")
+        return None
             
     def get_drive_id(self, site_id: str) -> Optional[str]:
         """
@@ -202,7 +279,40 @@ class SharePointUploader:
                 logger.error(f"Response content: {e.response.text}")
             return None
             
-    def upload_file(self, drive_id: str, file_path: str, sharepoint_filename: str) -> bool:
+    def get_folder_id(self, drive_id: str) -> Optional[str]:
+        """
+        Get the folder ID for the target folder, or use root if "Shared Documents"
+        """
+        if self.folder_path.lower() in ['shared documents', 'documents']:
+            logger.info("Using root folder (Shared Documents is typically the root)")
+            return None  # None means root folder
+            
+        logger.info(f"Getting folder ID for: {self.folder_path}")
+        
+        headers = {
+            'Authorization': f'Bearer {self.access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        try:
+            folder_path_encoded = urllib.parse.quote(self.folder_path, safe='/')
+            folder_url = f"{self.graph_base_url}/drives/{drive_id}/root:/{folder_path_encoded}"
+            response = requests.get(folder_url, headers=headers)
+            
+            if response.status_code == 200:
+                folder_data = response.json()
+                folder_id = folder_data.get('id')
+                logger.info(f"Found folder ID: {folder_id}")
+                return folder_id
+            else:
+                logger.warning(f"Folder not found, will use root folder. Status: {response.status_code}")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"Error getting folder ID, will use root: {e}")
+            return None
+            
+    def upload_file(self, drive_id: str, file_path: str, sharepoint_filename: str, folder_id: Optional[str] = None) -> bool:
         """
         Upload a file to SharePoint, overwriting if it exists
         """
@@ -223,10 +333,14 @@ class SharePointUploader:
             with open(file_path, 'rb') as file:
                 file_content = file.read()
                 
-            # Upload using simple upload (files under 4MB)
-            # For larger files, would need resumable upload
-            folder_path_encoded = self.folder_path.replace(' ', '%20')
-            upload_url = f"{self.graph_base_url}/drives/{drive_id}/root:/{folder_path_encoded}/{sharepoint_filename}:/content"
+            # Build upload URL based on whether we have a folder ID
+            if folder_id:
+                upload_url = f"{self.graph_base_url}/drives/{drive_id}/items/{folder_id}:/{sharepoint_filename}:/content"
+            else:
+                # Upload to root
+                upload_url = f"{self.graph_base_url}/drives/{drive_id}/root:/{sharepoint_filename}:/content"
+            
+            logger.info(f"Upload URL: {upload_url}")
             
             response = requests.put(upload_url, headers=headers, data=file_content)
             response.raise_for_status()
@@ -235,7 +349,9 @@ class SharePointUploader:
             
             if upload_response.get('id'):
                 file_size = len(file_content)
+                web_url = upload_response.get('webUrl', 'N/A')
                 logger.info(f"Successfully uploaded {sharepoint_filename} ({file_size} bytes)")
+                logger.info(f"File URL: {web_url}")
                 return True
             else:
                 logger.error(f"Upload response missing file ID for {sharepoint_filename}")
@@ -244,6 +360,7 @@ class SharePointUploader:
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to upload {sharepoint_filename}: {e}")
             if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Response status: {e.response.status_code}")
                 logger.error(f"Response content: {e.response.text}")
             return False
         except Exception as e:
@@ -283,8 +400,8 @@ class SharePointUploader:
         if not self.get_access_token():
             return False
             
-        # Get site ID
-        site_id = self.get_site_id()
+        # Get site ID using multiple methods
+        site_id = self.get_site_id_multiple_methods()
         if not site_id:
             return False
             
@@ -293,6 +410,9 @@ class SharePointUploader:
         if not drive_id:
             return False
             
+        # Get folder ID (optional)
+        folder_id = self.get_folder_id(drive_id)
+        
         # Upload each file
         upload_results = []
         
@@ -314,7 +434,7 @@ class SharePointUploader:
                 continue
                 
             # Upload file
-            success = self.upload_file(drive_id, local_file_path, sharepoint_filename)
+            success = self.upload_file(drive_id, local_file_path, sharepoint_filename, folder_id)
             upload_results.append(success)
             
         # Report results
