@@ -37,7 +37,6 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        # Add requests-ntlm for better SharePoint authentication
         pip install requests-ntlm
         
     - name: Verify project structure
@@ -54,8 +53,6 @@ jobs:
     - name: Set up environment variables
       run: |
         echo "Setting up environment variables for forecasting..."
-        # Environment variables are set via GitHub secrets
-        # FRED_API_KEY, EMAIL_*, NOTIFICATION_EMAIL are available as secrets
         
     - name: Run daily forecast
       env:
@@ -73,7 +70,7 @@ jobs:
         python daily_forecast.py
         
     - name: Upload forecast results
-      if: always()  # Upload even if forecast fails for debugging
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: forecast-results-${{ github.run_number }}
@@ -94,6 +91,7 @@ jobs:
       if: success()
       run: |
         echo "Checking forecast outputs..."
+        
         if [ -f data/upload/actuals.csv ]; then
           echo "✓ Actuals data saved"
           echo "Rows in actuals.csv: $(wc -l < data/upload/actuals.csv)"
@@ -104,6 +102,9 @@ jobs:
         if [ -f data/upload/predicted.csv ]; then
           echo "✓ Predictions data saved"
           echo "Rows in predicted.csv: $(wc -l < data/upload/predicted.csv)"
+        elif [ -f data/upload/predicts.csv ]; then
+          echo "✓ Predictions data saved (as predicts.csv)"
+          echo "Rows in predicts.csv: $(wc -l < data/upload/predicts.csv)"
         else
           echo "✗ Predictions data missing"
         fi
@@ -111,6 +112,9 @@ jobs:
         if [ -f data/upload/forecasted_data.csv ]; then
           echo "✓ Forecast data saved"
           echo "Rows in forecasted_data.csv: $(wc -l < data/upload/forecasted_data.csv)"
+        elif [ -f data/upload/forecasts.csv ]; then
+          echo "✓ Forecast data saved (as forecasts.csv)"
+          echo "Rows in forecasts.csv: $(wc -l < data/upload/forecasts.csv)"
         else
           echo "✗ Forecast data missing"
         fi
@@ -118,64 +122,13 @@ jobs:
         if [ -f data/upload/model_metrics.csv ]; then
           echo "✓ Model metrics saved"
           echo "Metrics content:"
-          head -n 5 data/upload/model_metrics.csv
+          head -n 3 data/upload/model_metrics.csv
         else
           echo "✗ Model metrics missing"
         fi
-                
-        - name: Upload CSV files to SharePoint
-        if: success()
-        env:
-          M365_USERNAME: ${{ secrets.M365_USERNAME }}
-          M365_PASSWORD: ${{ secrets.M365_PASSWORD }}
-          SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
-          SHAREPOINT_FOLDER_PATH: ${{ secrets.SHAREPOINT_FOLDER_PATH }}
-        run: |
-          echo "🚀 Starting daily SharePoint upload (overwrite mode)..."
-          python daily_sharepoint_uploader.py  # ← Use your correct file
-
-        def main():
-            """Main upload function"""
-            print("🚀 DAILY SHAREPOINT CSV UPLOADER")
-            print("=" * 50)
-            print(f"⏰ Upload time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            print("📝 Mode: Daily overwrite (no timestamps)")
-            print()
-            
-            # Validate environment variables
-            required_vars = ['M365_USERNAME', 'M365_PASSWORD', 'SHAREPOINT_SITE_URL']
-            missing_vars = [var for var in required_vars if not os.getenv(var)]
-            
-            if missing_vars:
-                print("❌ Missing required environment variables:")
-                for var in missing_vars:
-                    print(f"   - {var}")
-                return False
-            
-            # Initialize uploader
-            uploader = SharePointBasicUploader()
-            
-            print(f"🌐 Site: {uploader.site_url}")
-            print(f"👤 User: {uploader.username}")
-            print(f"📁 Folder: {uploader.folder_path}")
-            print()
-            
-            # Upload CSV files
-            if uploader.upload_csv_files():
-                print("\n🎉 DAILY UPLOAD SUCCESSFUL!")
-                print("📊 Fresh forecast data is now available in SharePoint")
-                return True
-            else:
-                print("\n❌ DAILY UPLOAD FAILED")
-                return False
         
-        if __name__ == "__main__":
-            success = main()
-            exit(0 if success else 1)
-        SCRIPT_EOF
-        
-        chmod +x sharepoint_uploader.py
-        echo "✅ SharePoint uploader script created"
+        echo "All files in data/upload:"
+        ls -la data/upload/
     
     - name: Upload CSV files to SharePoint
       if: success()
@@ -186,7 +139,7 @@ jobs:
         SHAREPOINT_FOLDER_PATH: ${{ secrets.SHAREPOINT_FOLDER_PATH }}
       run: |
         echo "🚀 Starting daily SharePoint upload (overwrite mode)..."
-        python sharepoint_uploader.py
+        python daily_sharepoint_uploader.py
         
     - name: SharePoint upload summary
       if: success()
