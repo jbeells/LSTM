@@ -47,9 +47,8 @@ jobs:
         PYTHONPATH: ${{ github.workspace }}/src
         FORCE_RUN: ${{ github.event.inputs.force_run || 'false' }}
       run: |
-        cd src
         echo "=== RUNNING DAILY FORECAST WITH DEBUG ==="
-        python daily_forecast.py
+        python src/daily_forecast.py
         echo "=== FORECAST SCRIPT COMPLETED ==="
         echo "Exit code: $?"
         
@@ -111,5 +110,4 @@ jobs:
         SHAREPOINT_FOLDER_PATH: ${{ secrets.SHAREPOINT_FOLDER_PATH }}
       run: |
         echo "Starting daily SharePoint upload..."
-        cd src
-        python daily_sharepoint_uploader.py
+        python src/daily_sharepoint_uploader.py
