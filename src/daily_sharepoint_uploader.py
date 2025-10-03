@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SharePoint CSV Uploader - Daily Overwrite Version
+SharePoint CSV Uploader - Daily Overwrite Version (FIXED)
 Files are overwritten each day with the same names
 """
 
@@ -33,9 +33,11 @@ class SharePointBasicUploader:
         
         digest_url = f"{self.site_url}/_api/contextinfo"
         
+        # Try NTLM authentication first (if available)
         try:
-            # Try NTLM authentication first
             from requests_ntlm import HttpNtlmAuth
+            print("   🔑 Trying NTLM authentication...")
+            
             auth = HttpNtlmAuth(self.username, self.password)
             
             response = self.session.post(
@@ -44,7 +46,8 @@ class SharePointBasicUploader:
                 headers={
                     'Accept': 'application/json;odata=verbose',
                     'Content-Type': 'application/json;odata=verbose'
-                }
+                },
+                timeout=30
             )
             
             if response.status_code == 200:
@@ -53,22 +56,24 @@ class SharePointBasicUploader:
                 print("   ✅ NTLM form digest obtained")
                 return True
             else:
-                print(f"   ❌ NTLM form digest failed: {response.status_code}")
-                return False
+                print(f"   ⚠️  NTLM failed ({response.status_code}), trying basic auth...")
                 
         except ImportError:
-            print("   ⚠️  requests-ntlm not available, trying basic auth...")
-            return self._try_basic_auth_digest()
+            print("   ⚠️  requests-ntlm not available, using basic auth...")
         except Exception as e:
-            print(f"   ❌ NTLM form digest error: {e}")
-            return self._try_basic_auth_digest()
+            print(f"   ⚠️  NTLM error ({e}), trying basic auth...")
+        
+        # Fallback to basic authentication (ALWAYS TRY THIS)
+        return self._try_basic_auth_digest()
     
     def _try_basic_auth_digest(self):
-        """Fallback to basic authentication"""
+        """Basic authentication for form digest"""
+        print("   🔑 Trying Basic authentication...")
+        
         digest_url = f"{self.site_url}/_api/contextinfo"
         
         try:
-            # Basic authentication
+            # Create basic auth header
             auth_string = f"{self.username}:{self.password}"
             auth_bytes = auth_string.encode('utf-8')
             auth_b64 = base64.b64encode(auth_bytes).decode('utf-8')
@@ -79,7 +84,8 @@ class SharePointBasicUploader:
                     'Authorization': f'Basic {auth_b64}',
                     'Accept': 'application/json;odata=verbose',
                     'Content-Type': 'application/json;odata=verbose'
-                }
+                },
+                timeout=30
             )
             
             if response.status_code == 200:
@@ -88,12 +94,19 @@ class SharePointBasicUploader:
                 print("   ✅ Basic auth form digest obtained")
                 return True
             else:
-                print(f"   ❌ Basic auth digest failed: {response.status_code}")
+                print(f"   ❌ Basic auth failed: {response.status_code}")
+                if response.status_code == 401:
+                    print("   🔍 Check username/password")
+                elif response.status_code == 403:
+                    print("   🔍 Check site permissions")
+                elif response.status_code == 404:
+                    print("   🔍 Check site URL")
+                    
                 print(f"   Response: {response.text[:200]}...")
                 return False
                 
         except Exception as e:
-            print(f"   ❌ Basic auth digest error: {e}")
+            print(f"   ❌ Basic auth error: {e}")
             return False
     
     def upload_file(self, file_path, filename=None):
@@ -118,59 +131,58 @@ class SharePointBasicUploader:
         # Upload URL with overwrite=true
         upload_url = f"{self.site_url}/_api/web/getfolderbyserverrelativeurl('{self.folder_path}')/files/add(url='{filename}',overwrite=true)"
         
+        # Use the same authentication method that worked for form digest
+        return self._upload_with_auth(upload_url, file_content, filename)
+    
+    def _upload_with_auth(self, upload_url, file_content, filename):
+        """Try upload with different auth methods"""
+        
+        headers = {
+            'Accept': 'application/json;odata=verbose',
+            'X-RequestDigest': self.form_digest,
+            'Content-Type': 'application/octet-stream'
+        }
+        
+        # Method 1: Try NTLM (if available)
         try:
-            headers = {
-                'Accept': 'application/json;odata=verbose',
-                'X-RequestDigest': self.form_digest,
-                'Content-Type': 'application/octet-stream'
-            }
+            from requests_ntlm import HttpNtlmAuth
+            auth = HttpNtlmAuth(self.username, self.password)
             
-            # Try NTLM authentication first
-            try:
-                from requests_ntlm import HttpNtlmAuth
-                auth = HttpNtlmAuth(self.username, self.password)
-                
-                response = self.session.post(
-                    upload_url,
-                    auth=auth,
-                    headers=headers,
-                    data=file_content
-                )
-                
-            except ImportError:
-                # Fallback to basic authentication
-                auth_string = f"{self.username}:{self.password}"
-                auth_bytes = auth_string.encode('utf-8')
-                auth_b64 = base64.b64encode(auth_bytes).decode('utf-8')
-                headers['Authorization'] = f'Basic {auth_b64}'
-                
-                response = self.session.post(
-                    upload_url,
-                    headers=headers,
-                    data=file_content
-                )
+            response = self.session.post(
+                upload_url,
+                auth=auth,
+                headers=headers,
+                data=file_content,
+                timeout=60
+            )
             
             if response.status_code in [200, 201]:
-                print(f"   ✅ Upload successful - File overwritten")
+                return self._handle_upload_success(response, file_content)
+            else:
+                print(f"   ⚠️  NTLM upload failed ({response.status_code}), trying basic auth...")
                 
-                # Parse response for details
-                try:
-                    data = response.json()
-                    server_url = data.get('d', {}).get('ServerRelativeUrl', 'Unknown')
-                    file_size = len(file_content)
-                    print(f"   📍 URL: {server_url}")
-                    print(f"   📏 Size: {file_size} bytes")
-                    
-                    # Get last modified time from response if available
-                    time_modified = data.get('d', {}).get('TimeLastModified', None)
-                    if time_modified:
-                        print(f"   🕒 Modified: {time_modified}")
-                        
-                except Exception as parse_error:
-                    print(f"   📏 Size: {len(file_content)} bytes")
-                    print(f"   ⚠️  Could not parse response details: {parse_error}")
-                
-                return True
+        except ImportError:
+            pass  # NTLM not available
+        except Exception as e:
+            print(f"   ⚠️  NTLM upload error ({e}), trying basic auth...")
+        
+        # Method 2: Basic authentication (fallback)
+        try:
+            auth_string = f"{self.username}:{self.password}"
+            auth_bytes = auth_string.encode('utf-8')
+            auth_b64 = base64.b64encode(auth_bytes).decode('utf-8')
+            
+            headers['Authorization'] = f'Basic {auth_b64}'
+            
+            response = self.session.post(
+                upload_url,
+                headers=headers,
+                data=file_content,
+                timeout=60
+            )
+            
+            if response.status_code in [200, 201]:
+                return self._handle_upload_success(response, file_content)
             else:
                 print(f"   ❌ Upload failed: HTTP {response.status_code}")
                 try:
@@ -184,6 +196,26 @@ class SharePointBasicUploader:
         except Exception as e:
             print(f"   ❌ Upload error: {e}")
             return False
+    
+    def _handle_upload_success(self, response, file_content):
+        """Handle successful upload response"""
+        print(f"   ✅ Upload successful - File overwritten")
+        
+        try:
+            data = response.json()
+            server_url = data.get('d', {}).get('ServerRelativeUrl', 'Unknown')
+            file_size = len(file_content)
+            print(f"   📍 URL: {server_url}")
+            print(f"   📏 Size: {file_size} bytes")
+            
+            time_modified = data.get('d', {}).get('TimeLastModified', None)
+            if time_modified:
+                print(f"   🕒 Modified: {time_modified}")
+                
+        except Exception:
+            print(f"   📏 Size: {len(file_content)} bytes")
+        
+        return True
     
     def upload_csv_files(self, directory="data/upload"):
         """Upload all CSV files from directory (daily overwrite)"""
