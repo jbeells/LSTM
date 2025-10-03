@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-SharePoint CSV Uploader Script - REST API Version
+SharePoint CSV Uploader Script - Fixed Token Type
 ================================================
 
-Alternative approach using SharePoint REST API instead of Microsoft Graph API.
-This may work better in some tenant configurations.
+Uses the correct token type and authentication method for SharePoint REST API.
+This version addresses the "Token type is not allowed" error.
 
 Files uploaded:
 - actuals.csv (recent year actuals)
@@ -25,7 +25,6 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 import urllib.parse
-import base64
 
 # Setup logging
 def setup_logging():
@@ -51,9 +50,9 @@ def setup_logging():
 
 logger = setup_logging()
 
-class SharePointRESTUploader:
+class SharePointUploader:
     """
-    SharePoint uploader using SharePoint REST API with App Registration
+    SharePoint uploader using Microsoft Graph API with proper authentication
     """
     
     def __init__(self):
@@ -66,24 +65,25 @@ class SharePointRESTUploader:
         self.site_url = os.getenv('SHAREPOINT_SITE_URL', 'https://jeanalytics.sharepoint.com/sites/LSTM')
         self.folder_path = os.getenv('SHAREPOINT_FOLDER_PATH', 'Shared Documents')
         
-        # Extract tenant domain from site URL
+        # Extract domain info
         if 'sharepoint.com' in self.site_url:
             url_parts = self.site_url.replace('https://', '').split('/')
-            self.tenant_domain = url_parts[0]  # tenant.sharepoint.com
-            self.site_name = url_parts[-1] if len(url_parts) > 2 else ''
+            self.tenant_name = url_parts[0].split('.')[0]  # Extract tenant name
+            self.hostname = url_parts[0]  # full hostname
+            self.site_name = url_parts[-1] if len(url_parts) > 2 else 'root'
         else:
             raise ValueError(f"Invalid SharePoint site URL: {self.site_url}")
         
-        # SharePoint REST API endpoints
-        self.rest_base_url = f"{self.site_url}/_api"
-        self.token_url = f"https://accounts.accesscontrol.windows.net/{self.tenant_id}/tokens/OAuth/2"
-        self.graph_token_url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
+        # Microsoft Graph API endpoints
+        self.graph_base_url = "https://graph.microsoft.com/v1.0"
+        self.token_url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
         
         self.access_token = None
         
-        logger.info(f"SharePoint REST uploader initialized for site: {self.site_url}")
-        logger.info(f"Target folder: {self.folder_path}")
-        logger.info(f"REST API base: {self.rest_base_url}")
+        logger.info(f"SharePoint uploader initialized")
+        logger.info(f"Site: {self.site_url}")
+        logger.info(f"Folder: {self.folder_path}")
+        logger.info(f"Tenant: {self.tenant_name}, Hostname: {self.hostname}")
         
     def validate_config(self) -> bool:
         """Validate that all required configuration is present"""
@@ -97,179 +97,201 @@ class SharePointRESTUploader:
         
         if missing_vars:
             logger.error(f"Missing required environment variables: {missing_vars}")
-            logger.error("Please ensure the following secrets are set in GitHub:")
-            for var in missing_vars:
-                logger.error(f"  - {var}")
             return False
             
         logger.info("All required configuration variables are present")
         return True
         
-    def get_sharepoint_access_token(self) -> bool:
+    def get_access_token(self) -> bool:
         """
-        Get SharePoint access token using SharePoint-specific OAuth endpoint
+        Get access token using client credentials flow with correct scope
         """
-        logger.info("Requesting SharePoint access token")
+        logger.info("Requesting Microsoft Graph access token")
         
-        # SharePoint resource identifier
-        resource = f"00000003-0000-0ff1-ce00-000000000000/{self.tenant_domain}@{self.tenant_id}"
-        
-        token_data = {
-            'grant_type': 'client_credentials',
-            'client_id': f"{self.client_id}@{self.tenant_id}",
-            'client_secret': self.client_secret,
-            'resource': resource
-        }
-        
-        try:
-            response = requests.post(self.token_url, data=token_data)
-            
-            if response.status_code == 200:
-                token_response = response.json()
-                self.access_token = token_response.get('access_token')
-                
-                if self.access_token:
-                    logger.info("Successfully obtained SharePoint access token")
-                    return True
-                else:
-                    logger.error("Access token not found in SharePoint response")
-                    return False
-            else:
-                logger.warning(f"SharePoint token request failed: {response.status_code}")
-                logger.warning(f"Response: {response.text}")
-                return False
-                
-        except Exception as e:
-            logger.warning(f"SharePoint token request failed with exception: {e}")
-            return False
-            
-    def get_graph_access_token(self) -> bool:
-        """
-        Get access token using Microsoft Graph (fallback method)
-        """
-        logger.info("Requesting Microsoft Graph access token as fallback")
-        
+        # Use the standard Graph API scope
         token_data = {
             'client_id': self.client_id,
             'client_secret': self.client_secret,
-            'scope': f'https://{self.tenant_domain}/AllSites.Write',
+            'scope': 'https://graph.microsoft.com/.default',
             'grant_type': 'client_credentials'
         }
         
         try:
-            response = requests.post(self.graph_token_url, data=token_data)
+            response = requests.post(self.token_url, data=token_data)
+            response.raise_for_status()
             
-            if response.status_code == 200:
-                token_response = response.json()
-                self.access_token = token_response.get('access_token')
+            token_response = response.json()
+            self.access_token = token_response.get('access_token')
+            
+            if self.access_token:
+                # Log token info for debugging (first/last 10 chars only)
+                token_preview = f"{self.access_token[:10]}...{self.access_token[-10:]}"
+                logger.info(f"Successfully obtained access token: {token_preview}")
                 
-                if self.access_token:
-                    logger.info("Successfully obtained Graph access token for SharePoint")
-                    return True
-                else:
-                    logger.error("Access token not found in Graph response")
-                    return False
-            else:
-                logger.warning(f"Graph token request failed: {response.status_code}")
-                logger.warning(f"Response: {response.text}")
-                return False
+                # Check token type and scope
+                token_type = token_response.get('token_type', 'unknown')
+                expires_in = token_response.get('expires_in', 'unknown')
+                logger.info(f"Token type: {token_type}, expires in: {expires_in} seconds")
                 
-        except Exception as e:
-            logger.warning(f"Graph token request failed with exception: {e}")
-            return False
-    
-    def get_access_token(self) -> bool:
-        """
-        Try multiple token acquisition methods
-        """
-        logger.info("Attempting to get access token using multiple methods")
-        
-        # Method 1: SharePoint-specific token
-        if self.get_sharepoint_access_token():
-            return True
-            
-        # Method 2: Graph API token with SharePoint scope
-        if self.get_graph_access_token():
-            return True
-            
-        logger.error("All token acquisition methods failed")
-        return False
-        
-    def test_rest_api_access(self) -> bool:
-        """
-        Test basic REST API access
-        """
-        logger.info("Testing SharePoint REST API access")
-        
-        headers = {
-            'Authorization': f'Bearer {self.access_token}',
-            'Accept': 'application/json;odata=verbose',
-            'Content-Type': 'application/json'
-        }
-        
-        try:
-            # Test basic site access
-            test_url = f"{self.rest_base_url}/web"
-            response = requests.get(test_url, headers=headers)
-            
-            if response.status_code == 200:
-                site_info = response.json()
-                site_title = site_info.get('d', {}).get('Title', 'Unknown')
-                logger.info(f"Successfully accessed site: {site_title}")
                 return True
             else:
-                logger.error(f"REST API test failed: {response.status_code}")
-                logger.error(f"Response: {response.text}")
+                logger.error("Access token not found in response")
                 return False
                 
-        except Exception as e:
-            logger.error(f"REST API test failed with exception: {e}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to obtain access token: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Response content: {e.response.text}")
             return False
-            
-    def get_folder_info(self) -> Optional[Dict]:
+    
+    def find_site_by_url(self) -> Optional[str]:
         """
-        Get information about the target folder
+        Find site using the direct URL method with better error handling
         """
-        logger.info(f"Getting folder information for: {self.folder_path}")
+        logger.info("Finding SharePoint site by URL")
         
         headers = {
             'Authorization': f'Bearer {self.access_token}',
-            'Accept': 'application/json;odata=verbose',
+            'Content-Type': 'application/json'
+        }
+        
+        # Try different URL formats
+        url_variations = [
+            f"{self.graph_base_url}/sites/{self.hostname}:/sites/{self.site_name}",
+            f"{self.graph_base_url}/sites/{self.tenant_name}.sharepoint.com:/sites/{self.site_name}",
+            f"{self.graph_base_url}/sites/{self.hostname},/sites/{self.site_name}",
+        ]
+        
+        for i, site_url in enumerate(url_variations, 1):
+            try:
+                logger.info(f"Attempt {i}: {site_url}")
+                response = requests.get(site_url, headers=headers)
+                
+                if response.status_code == 200:
+                    site_data = response.json()
+                    site_id = site_data.get('id')
+                    site_display_name = site_data.get('displayName', 'Unknown')
+                    
+                    if site_id:
+                        logger.info(f"✅ Found site: '{site_display_name}' (ID: {site_id})")
+                        return site_id
+                        
+                elif response.status_code == 404:
+                    logger.warning(f"❌ Site not found with this URL format")
+                else:
+                    logger.warning(f"❌ HTTP {response.status_code}: {response.text}")
+                    
+            except Exception as e:
+                logger.warning(f"❌ Exception: {e}")
+        
+        # If direct methods fail, try searching
+        return self.search_for_site()
+    
+    def search_for_site(self) -> Optional[str]:
+        """
+        Search for the site by name
+        """
+        logger.info("Searching for site by name")
+        
+        headers = {
+            'Authorization': f'Bearer {self.access_token}',
             'Content-Type': 'application/json'
         }
         
         try:
-            # For "Shared Documents", use the default document library
-            if self.folder_path.lower() in ['shared documents', 'documents']:
-                folder_url = f"{self.rest_base_url}/web/lists/getbytitle('Documents')"
-            else:
-                folder_path_encoded = urllib.parse.quote(self.folder_path)
-                folder_url = f"{self.rest_base_url}/web/getfolderbyserverrelativeurl('{folder_path_encoded}')"
-            
-            logger.info(f"Folder URL: {folder_url}")
-            response = requests.get(folder_url, headers=headers)
+            # Search for sites
+            search_url = f"{self.graph_base_url}/sites?search=*"
+            response = requests.get(search_url, headers=headers)
             
             if response.status_code == 200:
-                folder_info = response.json()
-                logger.info("Successfully accessed target folder/library")
-                return folder_info
+                search_data = response.json()
+                sites = search_data.get('value', [])
+                
+                logger.info(f"Found {len(sites)} total sites. Looking for matches...")
+                
+                # Look for our site
+                possible_matches = []
+                for site in sites:
+                    site_name = site.get('name', '').lower()
+                    site_display_name = site.get('displayName', '').lower()
+                    site_web_url = site.get('webUrl', '').lower()
+                    
+                    if (self.site_name.lower() in site_name or 
+                        self.site_name.lower() in site_display_name or
+                        self.site_name.lower() in site_web_url):
+                        possible_matches.append(site)
+                        
+                if possible_matches:
+                    # Use the first match
+                    best_match = possible_matches[0]
+                    site_id = best_match.get('id')
+                    display_name = best_match.get('displayName', 'Unknown')
+                    web_url = best_match.get('webUrl', 'Unknown')
+                    
+                    logger.info(f"✅ Found matching site: '{display_name}'")
+                    logger.info(f"   URL: {web_url}")
+                    logger.info(f"   ID: {site_id}")
+                    
+                    return site_id
+                else:
+                    logger.error(f"❌ No sites found matching '{self.site_name}'")
+                    
+                    # Show available sites for debugging
+                    logger.info("Available sites:")
+                    for i, site in enumerate(sites[:10], 1):  # Show first 10
+                        logger.info(f"  {i}. '{site.get('displayName', 'Unknown')}' - {site.get('webUrl', 'Unknown')}")
+                    
+                    return None
             else:
-                logger.warning(f"Folder access failed: {response.status_code}")
-                logger.warning(f"Response: {response.text}")
+                logger.error(f"Site search failed: HTTP {response.status_code}")
+                logger.error(f"Response: {response.text}")
                 return None
                 
         except Exception as e:
-            logger.warning(f"Folder access failed with exception: {e}")
+            logger.error(f"Site search failed with exception: {e}")
             return None
             
-    def upload_file_rest(self, file_path: str, sharepoint_filename: str) -> bool:
+    def get_drive_id(self, site_id: str) -> Optional[str]:
         """
-        Upload file using SharePoint REST API
+        Get the default drive (document library) ID for the site
         """
-        logger.info(f"Uploading {file_path} as {sharepoint_filename} via REST API")
+        logger.info("Getting drive ID for document library")
+        
+        headers = {
+            'Authorization': f'Bearer {self.access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        try:
+            drive_url = f"{self.graph_base_url}/sites/{site_id}/drive"
+            response = requests.get(drive_url, headers=headers)
+            response.raise_for_status()
+            
+            drive_data = response.json()
+            drive_id = drive_data.get('id')
+            drive_name = drive_data.get('name', 'Unknown')
+            
+            if drive_id:
+                logger.info(f"✅ Found drive: '{drive_name}' (ID: {drive_id})")
+                return drive_id
+            else:
+                logger.error("❌ Drive ID not found in response")
+                return None
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Failed to get drive ID: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Response: {e.response.text}")
+            return None
+            
+    def upload_file(self, drive_id: str, file_path: str, sharepoint_filename: str) -> bool:
+        """
+        Upload a file to the SharePoint document library
+        """
+        logger.info(f"📤 Uploading {sharepoint_filename}")
         
         if not os.path.exists(file_path):
-            logger.error(f"File not found: {file_path}")
+            logger.error(f"❌ File not found: {file_path}")
             return False
             
         try:
@@ -277,40 +299,42 @@ class SharePointRESTUploader:
             with open(file_path, 'rb') as file:
                 file_content = file.read()
                 
-            # Base64 encode the file content for REST API
-            file_content_b64 = base64.b64encode(file_content).decode('utf-8')
-                
+            file_size = len(file_content)
+            logger.info(f"   File size: {file_size:,} bytes")
+            
+            # Prepare upload
             headers = {
                 'Authorization': f'Bearer {self.access_token}',
-                'Accept': 'application/json;odata=verbose',
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/octet-stream'
             }
             
-            # Upload to Shared Documents library
-            upload_url = f"{self.rest_base_url}/web/lists/getbytitle('Documents')/RootFolder/Files/add(url='{sharepoint_filename}',overwrite=true)"
+            # Use simple upload for files under 4MB
+            # For Shared Documents, upload to root of drive
+            upload_url = f"{self.graph_base_url}/drives/{drive_id}/root:/{sharepoint_filename}:/content"
             
-            # For REST API, we need to send the binary content directly
-            headers['Content-Type'] = 'application/octet-stream'
-            
-            response = requests.post(upload_url, headers=headers, data=file_content)
+            response = requests.put(upload_url, headers=headers, data=file_content)
             
             if response.status_code in [200, 201]:
-                logger.info(f"Successfully uploaded {sharepoint_filename} via REST API")
+                upload_response = response.json()
+                web_url = upload_response.get('webUrl', 'Unknown')
+                
+                logger.info(f"✅ Successfully uploaded {sharepoint_filename}")
+                logger.info(f"   SharePoint URL: {web_url}")
                 return True
             else:
-                logger.error(f"REST API upload failed: {response.status_code}")
+                logger.error(f"❌ Upload failed: HTTP {response.status_code}")
                 logger.error(f"Response: {response.text}")
                 return False
                 
         except Exception as e:
-            logger.error(f"REST API upload failed with exception: {e}")
+            logger.error(f"❌ Upload failed with exception: {e}")
             return False
             
     def upload_csv_files(self) -> bool:
         """
-        Upload all CSV files to SharePoint using REST API
+        Main method to upload all CSV files
         """
-        logger.info("Starting CSV files upload to SharePoint via REST API")
+        logger.info("🚀 Starting CSV upload process")
         
         # Define files to upload
         csv_files = [
@@ -320,95 +344,101 @@ class SharePointRESTUploader:
             ('model_metrics.csv', 'model_metrics.csv')
         ]
         
-        # Get upload directory path
+        # Get upload directory
         project_root = os.path.dirname(os.path.dirname(__file__))
         upload_dir = os.path.join(project_root, 'data', 'upload')
         
-        logger.info(f"Looking for CSV files in: {upload_dir}")
+        logger.info(f"📁 Upload directory: {upload_dir}")
         
-        # Check if upload directory exists
         if not os.path.exists(upload_dir):
-            logger.error(f"Upload directory not found: {upload_dir}")
+            logger.error(f"❌ Upload directory not found: {upload_dir}")
             return False
             
+        # Check what files exist
+        existing_files = [f for f in os.listdir(upload_dir) if f.endswith('.csv')]
+        logger.info(f"📋 Found CSV files: {existing_files}")
+        
         # Validate configuration
         if not self.validate_config():
             return False
             
         # Get access token
         if not self.get_access_token():
+            logger.error("❌ Failed to get access token")
             return False
             
-        # Test REST API access
-        if not self.test_rest_api_access():
-            logger.error("REST API access test failed")
+        # Find SharePoint site
+        site_id = self.find_site_by_url()
+        if not site_id:
+            logger.error("❌ Could not find SharePoint site")
             return False
             
-        # Get folder information
-        folder_info = self.get_folder_info()
-        if folder_info is None:
-            logger.warning("Could not access target folder, but continuing with upload attempt")
+        # Get drive ID
+        drive_id = self.get_drive_id(site_id)
+        if not drive_id:
+            logger.error("❌ Could not get drive ID")
+            return False
             
-        # Upload each file
+        # Upload files
         upload_results = []
+        successful_uploads = 0
         
         for local_filename, sharepoint_filename in csv_files:
             local_file_path = os.path.join(upload_dir, local_filename)
             
             if not os.path.exists(local_file_path):
-                logger.warning(f"File not found, skipping: {local_file_path}")
+                logger.warning(f"⚠️  File not found, skipping: {local_filename}")
                 upload_results.append(False)
                 continue
                 
-            # Check file size
             file_size = os.path.getsize(local_file_path)
-            logger.info(f"File size for {local_filename}: {file_size} bytes")
-            
             if file_size == 0:
-                logger.warning(f"File is empty, skipping: {local_filename}")
+                logger.warning(f"⚠️  File is empty, skipping: {local_filename}")
                 upload_results.append(False)
                 continue
                 
             # Upload file
-            success = self.upload_file_rest(local_file_path, sharepoint_filename)
+            success = self.upload_file(drive_id, local_file_path, sharepoint_filename)
             upload_results.append(success)
             
+            if success:
+                successful_uploads += 1
+                
         # Report results
-        successful_uploads = sum(upload_results)
-        total_files = len(csv_files)
+        total_files = len([f for f in csv_files if os.path.exists(os.path.join(upload_dir, f[0]))])
         
-        logger.info(f"Upload summary: {successful_uploads}/{total_files} files uploaded successfully")
+        logger.info(f"📊 Upload Summary: {successful_uploads}/{total_files} files uploaded successfully")
         
         return successful_uploads > 0
 
 
 def main():
     """
-    Main execution function for SharePoint upload
+    Main execution function
     """
-    logger.info("=" * 60)
-    logger.info("SHAREPOINT CSV UPLOAD PROCESS STARTED (REST API VERSION)")
-    logger.info(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("🚀 SHAREPOINT CSV UPLOAD PROCESS STARTED")
+    logger.info(f"⏰ Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 70)
     
     try:
-        uploader = SharePointRESTUploader()
+        uploader = SharePointUploader()
         success = uploader.upload_csv_files()
         
         if success:
-            logger.info("=" * 60)
-            logger.info("SHAREPOINT CSV UPLOAD PROCESS COMPLETED SUCCESSFULLY")
-            logger.info(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            logger.info("=" * 60)
+            logger.info("=" * 70)
+            logger.info("✅ SHAREPOINT CSV UPLOAD PROCESS COMPLETED SUCCESSFULLY")
+            logger.info(f"⏰ End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info("=" * 70)
         else:
             raise Exception("SharePoint upload process failed")
             
     except Exception as e:
-        logger.error("=" * 60)
-        logger.error("SHAREPOINT CSV UPLOAD PROCESS FAILED")
-        logger.error(f"Error: {str(e)}")
-        logger.error(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.error("=" * 60)
+        logger.error("=" * 70)
+        logger.error("❌ SHAREPOINT CSV UPLOAD PROCESS FAILED")
+        logger.error(f"💥 Error: {str(e)}")
+        logger.error(f"⏰ End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.error("=" * 70)
         sys.exit(1)
 
 
