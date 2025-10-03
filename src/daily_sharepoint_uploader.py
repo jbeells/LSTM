@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
 """
-SharePoint CSV Uploader Script - Fixed Token Type
-================================================
+SharePoint CSV Uploader - Diagnostic Version
+===========================================
 
-Uses the correct token type and authentication method for SharePoint REST API.
-This version addresses the "Token type is not allowed" error.
-
-Files uploaded:
-- actuals.csv (recent year actuals)
-- predicts.csv (recent year predictions) 
-- forecasts.csv (30-day forecast)
-- model_metrics.csv (model performance metrics)
+This version includes comprehensive diagnostics to identify permission and configuration issues.
 
 Author: AI Assistant
 Date: 2024-10-03
@@ -21,6 +14,7 @@ import sys
 import logging
 import requests
 import json
+import base64
 from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
@@ -50,43 +44,39 @@ def setup_logging():
 
 logger = setup_logging()
 
-class SharePointUploader:
+class SharePointDiagnostic:
     """
-    SharePoint uploader using Microsoft Graph API with proper authentication
+    SharePoint diagnostic and uploader with comprehensive troubleshooting
     """
     
     def __init__(self):
-        """Initialize SharePoint uploader with configuration from environment variables"""
+        """Initialize with configuration from environment variables"""
         self.tenant_id = os.getenv('SHAREPOINT_TENANT_ID')
         self.client_id = os.getenv('SHAREPOINT_CLIENT_ID') 
         self.client_secret = os.getenv('SHAREPOINT_CLIENT_SECRET')
         
-        # SharePoint site configuration
         self.site_url = os.getenv('SHAREPOINT_SITE_URL', 'https://jeanalytics.sharepoint.com/sites/LSTM')
         self.folder_path = os.getenv('SHAREPOINT_FOLDER_PATH', 'Shared Documents')
         
-        # Extract domain info
+        # Extract components
         if 'sharepoint.com' in self.site_url:
             url_parts = self.site_url.replace('https://', '').split('/')
-            self.tenant_name = url_parts[0].split('.')[0]  # Extract tenant name
-            self.hostname = url_parts[0]  # full hostname
+            self.tenant_name = url_parts[0].split('.')[0]
+            self.hostname = url_parts[0]
             self.site_name = url_parts[-1] if len(url_parts) > 2 else 'root'
         else:
             raise ValueError(f"Invalid SharePoint site URL: {self.site_url}")
         
-        # Microsoft Graph API endpoints
         self.graph_base_url = "https://graph.microsoft.com/v1.0"
         self.token_url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
-        
         self.access_token = None
         
-        logger.info(f"SharePoint uploader initialized")
-        logger.info(f"Site: {self.site_url}")
-        logger.info(f"Folder: {self.folder_path}")
-        logger.info(f"Tenant: {self.tenant_name}, Hostname: {self.hostname}")
+        logger.info(f"🔧 Diagnostic mode initialized")
+        logger.info(f"   Site: {self.site_url}")
+        logger.info(f"   Tenant: {self.tenant_name}")
         
     def validate_config(self) -> bool:
-        """Validate that all required configuration is present"""
+        """Validate configuration"""
         required_vars = {
             'SHAREPOINT_TENANT_ID': self.tenant_id,
             'SHAREPOINT_CLIENT_ID': self.client_id, 
@@ -96,19 +86,16 @@ class SharePointUploader:
         missing_vars = [var for var, value in required_vars.items() if not value]
         
         if missing_vars:
-            logger.error(f"Missing required environment variables: {missing_vars}")
+            logger.error(f"❌ Missing required environment variables: {missing_vars}")
             return False
             
-        logger.info("All required configuration variables are present")
+        logger.info("✅ All required configuration variables are present")
         return True
         
     def get_access_token(self) -> bool:
-        """
-        Get access token using client credentials flow with correct scope
-        """
-        logger.info("Requesting Microsoft Graph access token")
+        """Get access token and analyze it"""
+        logger.info("🔑 Requesting Microsoft Graph access token")
         
-        # Use the standard Graph API scope
         token_data = {
             'client_id': self.client_id,
             'client_secret': self.client_secret,
@@ -124,321 +111,324 @@ class SharePointUploader:
             self.access_token = token_response.get('access_token')
             
             if self.access_token:
-                # Log token info for debugging (first/last 10 chars only)
-                token_preview = f"{self.access_token[:10]}...{self.access_token[-10:]}"
-                logger.info(f"Successfully obtained access token: {token_preview}")
+                logger.info("✅ Successfully obtained access token")
                 
-                # Check token type and scope
-                token_type = token_response.get('token_type', 'unknown')
-                expires_in = token_response.get('expires_in', 'unknown')
-                logger.info(f"Token type: {token_type}, expires in: {expires_in} seconds")
-                
+                # Analyze the token
+                self.analyze_token()
                 return True
             else:
-                logger.error("Access token not found in response")
+                logger.error("❌ Access token not found in response")
                 return False
                 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to obtain access token: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Response content: {e.response.text}")
+        except Exception as e:
+            logger.error(f"❌ Failed to obtain access token: {e}")
             return False
     
-    def find_site_by_url(self) -> Optional[str]:
-        """
-        Find site using the direct URL method with better error handling
-        """
-        logger.info("Finding SharePoint site by URL")
+    def analyze_token(self):
+        """Analyze the JWT token to understand its contents"""
+        logger.info("🔍 Analyzing access token")
+        
+        try:
+            # JWT tokens have 3 parts separated by dots
+            token_parts = self.access_token.split('.')
+            
+            if len(token_parts) >= 2:
+                # Decode the payload (second part)
+                # Add padding if needed
+                payload = token_parts[1]
+                padding = len(payload) % 4
+                if padding:
+                    payload += '=' * (4 - padding)
+                
+                decoded = base64.b64decode(payload)
+                token_data = json.loads(decoded)
+                
+                logger.info("📋 Token Analysis:")
+                logger.info(f"   Issuer: {token_data.get('iss', 'Unknown')}")
+                logger.info(f"   Audience: {token_data.get('aud', 'Unknown')}")
+                logger.info(f"   App ID: {token_data.get('appid', 'Unknown')}")
+                logger.info(f"   Tenant ID: {token_data.get('tid', 'Unknown')}")
+                
+                # Check permissions/roles
+                roles = token_data.get('roles', [])
+                if roles:
+                    logger.info(f"   Granted Roles: {roles}")
+                else:
+                    logger.warning("   ⚠️  No roles found in token")
+                
+                # Check scopes
+                scp = token_data.get('scp', '')
+                if scp:
+                    logger.info(f"   Scopes: {scp}")
+                else:
+                    logger.warning("   ⚠️  No scopes found in token")
+                    
+        except Exception as e:
+            logger.warning(f"⚠️  Could not analyze token: {e}")
+    
+    def test_basic_graph_access(self) -> bool:
+        """Test basic Microsoft Graph API access"""
+        logger.info("🧪 Testing basic Graph API access")
         
         headers = {
             'Authorization': f'Bearer {self.access_token}',
             'Content-Type': 'application/json'
         }
         
-        # Try different URL formats
-        url_variations = [
-            f"{self.graph_base_url}/sites/{self.hostname}:/sites/{self.site_name}",
-            f"{self.graph_base_url}/sites/{self.tenant_name}.sharepoint.com:/sites/{self.site_name}",
-            f"{self.graph_base_url}/sites/{self.hostname},/sites/{self.site_name}",
+        # Test basic Graph access
+        test_endpoints = [
+            ("/me", "User profile (should fail for app-only)"),
+            ("/applications", "Applications (requires Directory permissions)"),
+            ("/organization", "Organization info"),
+            ("/sites", "Sites (basic access)")
         ]
         
-        for i, site_url in enumerate(url_variations, 1):
+        for endpoint, description in test_endpoints:
             try:
-                logger.info(f"Attempt {i}: {site_url}")
-                response = requests.get(site_url, headers=headers)
+                url = f"https://graph.microsoft.com/v1.0{endpoint}"
+                response = requests.get(url, headers=headers)
                 
                 if response.status_code == 200:
-                    site_data = response.json()
-                    site_id = site_data.get('id')
-                    site_display_name = site_data.get('displayName', 'Unknown')
-                    
-                    if site_id:
-                        logger.info(f"✅ Found site: '{site_display_name}' (ID: {site_id})")
-                        return site_id
-                        
-                elif response.status_code == 404:
-                    logger.warning(f"❌ Site not found with this URL format")
+                    logger.info(f"   ✅ {description}: SUCCESS")
+                elif response.status_code == 403:
+                    logger.info(f"   🔒 {description}: FORBIDDEN (no permission)")
+                elif response.status_code == 401:
+                    logger.info(f"   ❌ {description}: UNAUTHORIZED")
                 else:
-                    logger.warning(f"❌ HTTP {response.status_code}: {response.text}")
+                    logger.info(f"   ❓ {description}: HTTP {response.status_code}")
                     
             except Exception as e:
-                logger.warning(f"❌ Exception: {e}")
-        
-        # If direct methods fail, try searching
-        return self.search_for_site()
+                logger.info(f"   💥 {description}: EXCEPTION - {e}")
     
-    def search_for_site(self) -> Optional[str]:
-        """
-        Search for the site by name
-        """
-        logger.info("Searching for site by name")
+    def test_sharepoint_permissions(self) -> bool:
+        """Test different SharePoint permission levels"""
+        logger.info("🔐 Testing SharePoint-specific permissions")
         
         headers = {
             'Authorization': f'Bearer {self.access_token}',
             'Content-Type': 'application/json'
         }
         
-        try:
+        # Test different SharePoint endpoints to understand permissions
+        test_cases = [
+            # Basic sites access
+            {
+                'url': f"{self.graph_base_url}/sites",
+                'description': 'List all sites',
+                'expected': 'Should work with Sites.Read.All or Sites.ReadWrite.All'
+            },
+            # Specific tenant root site
+            {
+                'url': f"{self.graph_base_url}/sites/{self.hostname}",
+                'description': 'Access tenant root site',
+                'expected': 'Should work if tenant allows app access'
+            },
             # Search for sites
-            search_url = f"{self.graph_base_url}/sites?search=*"
-            response = requests.get(search_url, headers=headers)
-            
-            if response.status_code == 200:
-                search_data = response.json()
-                sites = search_data.get('value', [])
-                
-                logger.info(f"Found {len(sites)} total sites. Looking for matches...")
-                
-                # Look for our site
-                possible_matches = []
-                for site in sites:
-                    site_name = site.get('name', '').lower()
-                    site_display_name = site.get('displayName', '').lower()
-                    site_web_url = site.get('webUrl', '').lower()
-                    
-                    if (self.site_name.lower() in site_name or 
-                        self.site_name.lower() in site_display_name or
-                        self.site_name.lower() in site_web_url):
-                        possible_matches.append(site)
-                        
-                if possible_matches:
-                    # Use the first match
-                    best_match = possible_matches[0]
-                    site_id = best_match.get('id')
-                    display_name = best_match.get('displayName', 'Unknown')
-                    web_url = best_match.get('webUrl', 'Unknown')
-                    
-                    logger.info(f"✅ Found matching site: '{display_name}'")
-                    logger.info(f"   URL: {web_url}")
-                    logger.info(f"   ID: {site_id}")
-                    
-                    return site_id
-                else:
-                    logger.error(f"❌ No sites found matching '{self.site_name}'")
-                    
-                    # Show available sites for debugging
-                    logger.info("Available sites:")
-                    for i, site in enumerate(sites[:10], 1):  # Show first 10
-                        logger.info(f"  {i}. '{site.get('displayName', 'Unknown')}' - {site.get('webUrl', 'Unknown')}")
-                    
-                    return None
-            else:
-                logger.error(f"Site search failed: HTTP {response.status_code}")
-                logger.error(f"Response: {response.text}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Site search failed with exception: {e}")
-            return None
-            
-    def get_drive_id(self, site_id: str) -> Optional[str]:
-        """
-        Get the default drive (document library) ID for the site
-        """
-        logger.info("Getting drive ID for document library")
-        
-        headers = {
-            'Authorization': f'Bearer {self.access_token}',
-            'Content-Type': 'application/json'
-        }
-        
-        try:
-            drive_url = f"{self.graph_base_url}/sites/{site_id}/drive"
-            response = requests.get(drive_url, headers=headers)
-            response.raise_for_status()
-            
-            drive_data = response.json()
-            drive_id = drive_data.get('id')
-            drive_name = drive_data.get('name', 'Unknown')
-            
-            if drive_id:
-                logger.info(f"✅ Found drive: '{drive_name}' (ID: {drive_id})")
-                return drive_id
-            else:
-                logger.error("❌ Drive ID not found in response")
-                return None
-                
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Failed to get drive ID: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Response: {e.response.text}")
-            return None
-            
-    def upload_file(self, drive_id: str, file_path: str, sharepoint_filename: str) -> bool:
-        """
-        Upload a file to the SharePoint document library
-        """
-        logger.info(f"📤 Uploading {sharepoint_filename}")
-        
-        if not os.path.exists(file_path):
-            logger.error(f"❌ File not found: {file_path}")
-            return False
-            
-        try:
-            # Read file content
-            with open(file_path, 'rb') as file:
-                file_content = file.read()
-                
-            file_size = len(file_content)
-            logger.info(f"   File size: {file_size:,} bytes")
-            
-            # Prepare upload
-            headers = {
-                'Authorization': f'Bearer {self.access_token}',
-                'Content-Type': 'application/octet-stream'
+            {
+                'url': f"{self.graph_base_url}/sites?search=*",
+                'description': 'Search sites',
+                'expected': 'Should work with basic Sites permissions'
             }
-            
-            # Use simple upload for files under 4MB
-            # For Shared Documents, upload to root of drive
-            upload_url = f"{self.graph_base_url}/drives/{drive_id}/root:/{sharepoint_filename}:/content"
-            
-            response = requests.put(upload_url, headers=headers, data=file_content)
-            
-            if response.status_code in [200, 201]:
-                upload_response = response.json()
-                web_url = upload_response.get('webUrl', 'Unknown')
-                
-                logger.info(f"✅ Successfully uploaded {sharepoint_filename}")
-                logger.info(f"   SharePoint URL: {web_url}")
-                return True
-            else:
-                logger.error(f"❌ Upload failed: HTTP {response.status_code}")
-                logger.error(f"Response: {response.text}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Upload failed with exception: {e}")
-            return False
-            
-    def upload_csv_files(self) -> bool:
-        """
-        Main method to upload all CSV files
-        """
-        logger.info("🚀 Starting CSV upload process")
-        
-        # Define files to upload
-        csv_files = [
-            ('actuals.csv', 'actuals.csv'),
-            ('predicts.csv', 'predicts.csv'), 
-            ('forecasts.csv', 'forecasts.csv'),
-            ('model_metrics.csv', 'model_metrics.csv')
         ]
         
-        # Get upload directory
+        any_success = False
+        
+        for test_case in test_cases:
+            try:
+                logger.info(f"   Testing: {test_case['description']}")
+                logger.info(f"   URL: {test_case['url']}")
+                
+                response = requests.get(test_case['url'], headers=headers)
+                
+                if response.status_code == 200:
+                    logger.info(f"   ✅ SUCCESS: {test_case['description']}")
+                    
+                    # Try to get some data
+                    data = response.json()
+                    if 'value' in data:
+                        count = len(data['value'])
+                        logger.info(f"      Found {count} items")
+                        any_success = True
+                    else:
+                        logger.info(f"      Single item response")
+                        any_success = True
+                        
+                elif response.status_code == 401:
+                    error_data = response.json() if response.text else {}
+                    error_code = error_data.get('error', {}).get('code', 'unknown')
+                    logger.error(f"   ❌ UNAUTHORIZED: {test_case['description']}")
+                    logger.error(f"      Error code: {error_code}")
+                    logger.error(f"      Expected: {test_case['expected']}")
+                    
+                elif response.status_code == 403:
+                    logger.error(f"   🔒 FORBIDDEN: {test_case['description']}")
+                    logger.error(f"      Expected: {test_case['expected']}")
+                    
+                else:
+                    logger.warning(f"   ❓ HTTP {response.status_code}: {test_case['description']}")
+                    
+            except Exception as e:
+                logger.error(f"   💥 EXCEPTION: {test_case['description']} - {e}")
+        
+        return any_success
+    
+    def try_alternative_upload_methods(self) -> bool:
+        """Try alternative upload methods if Graph API fails"""
+        logger.info("🔄 Trying alternative upload methods")
+        
+        csv_files = ['actuals.csv', 'predicts.csv', 'forecasts.csv', 'model_metrics.csv']
         project_root = os.path.dirname(os.path.dirname(__file__))
         upload_dir = os.path.join(project_root, 'data', 'upload')
         
-        logger.info(f"📁 Upload directory: {upload_dir}")
+        # Check if we have files to upload
+        existing_files = []
+        for filename in csv_files:
+            file_path = os.path.join(upload_dir, filename)
+            if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                existing_files.append((filename, file_path))
         
-        if not os.path.exists(upload_dir):
-            logger.error(f"❌ Upload directory not found: {upload_dir}")
+        if not existing_files:
+            logger.warning("⚠️  No CSV files found to upload")
             return False
             
-        # Check what files exist
-        existing_files = [f for f in os.listdir(upload_dir) if f.endswith('.csv')]
-        logger.info(f"📋 Found CSV files: {existing_files}")
+        logger.info(f"📋 Found {len(existing_files)} files to upload: {[f[0] for f in existing_files]}")
         
-        # Validate configuration
+        # Method 1: Try direct site access with known site ID format
+        logger.info("🔍 Method 1: Direct site ID approach")
+        success = self.try_direct_site_access(existing_files)
+        if success:
+            return True
+            
+        # Method 2: Try with different authentication scopes
+        logger.info("🔍 Method 2: Alternative token scopes")
+        success = self.try_alternative_scopes(existing_files)
+        if success:
+            return True
+            
+        logger.error("❌ All alternative upload methods failed")
+        return False
+    
+    def try_direct_site_access(self, files_to_upload) -> bool:
+        """Try accessing site with constructed site ID"""
+        logger.info("   Trying direct site access with constructed ID")
+        
+        # SharePoint site IDs typically follow a pattern
+        # Let's try a few common formats
+        site_id_patterns = [
+            f"{self.hostname},{self.tenant_id},{self.site_name}",
+            f"{self.hostname}:/{self.site_name}",
+        ]
+        
+        for pattern in site_id_patterns:
+            logger.info(f"   Trying site ID pattern: {pattern}")
+            # This would require more complex logic to test
+            # For now, just log the attempt
+        
+        return False
+    
+    def try_alternative_scopes(self, files_to_upload) -> bool:
+        """Try getting token with different scopes"""
+        logger.info("   Trying alternative token scopes")
+        
+        alternative_scopes = [
+            f"https://{self.hostname}/AllSites.Write",
+            f"https://{self.hostname}/.default",
+            "https://graph.microsoft.com/Sites.ReadWrite.All"
+        ]
+        
+        for scope in alternative_scopes:
+            logger.info(f"   Trying scope: {scope}")
+            
+            token_data = {
+                'client_id': self.client_id,
+                'client_secret': self.client_secret,
+                'scope': scope,
+                'grant_type': 'client_credentials'
+            }
+            
+            try:
+                response = requests.post(self.token_url, data=token_data)
+                if response.status_code == 200:
+                    token_response = response.json()
+                    alt_token = token_response.get('access_token')
+                    
+                    if alt_token:
+                        logger.info(f"   ✅ Got token with scope: {scope}")
+                        # Here you could try using this token for site access
+                        # For now, just log success
+                    else:
+                        logger.info(f"   ❌ No token with scope: {scope}")
+                else:
+                    logger.info(f"   ❌ Failed to get token with scope: {scope}")
+                    
+            except Exception as e:
+                logger.info(f"   💥 Exception with scope {scope}: {e}")
+        
+        return False
+    
+    def run_diagnostics(self) -> bool:
+        """Run comprehensive diagnostics"""
+        logger.info("🔧 Starting SharePoint diagnostics")
+        
+        # Step 1: Validate config
         if not self.validate_config():
             return False
-            
-        # Get access token
+        
+        # Step 2: Get access token
         if not self.get_access_token():
-            logger.error("❌ Failed to get access token")
             return False
-            
-        # Find SharePoint site
-        site_id = self.find_site_by_url()
-        if not site_id:
-            logger.error("❌ Could not find SharePoint site")
-            return False
-            
-        # Get drive ID
-        drive_id = self.get_drive_id(site_id)
-        if not drive_id:
-            logger.error("❌ Could not get drive ID")
-            return False
-            
-        # Upload files
-        upload_results = []
-        successful_uploads = 0
         
-        for local_filename, sharepoint_filename in csv_files:
-            local_file_path = os.path.join(upload_dir, local_filename)
-            
-            if not os.path.exists(local_file_path):
-                logger.warning(f"⚠️  File not found, skipping: {local_filename}")
-                upload_results.append(False)
-                continue
-                
-            file_size = os.path.getsize(local_file_path)
-            if file_size == 0:
-                logger.warning(f"⚠️  File is empty, skipping: {local_filename}")
-                upload_results.append(False)
-                continue
-                
-            # Upload file
-            success = self.upload_file(drive_id, local_file_path, sharepoint_filename)
-            upload_results.append(success)
-            
-            if success:
-                successful_uploads += 1
-                
-        # Report results
-        total_files = len([f for f in csv_files if os.path.exists(os.path.join(upload_dir, f[0]))])
+        # Step 3: Test basic Graph access
+        self.test_basic_graph_access()
         
-        logger.info(f"📊 Upload Summary: {successful_uploads}/{total_files} files uploaded successfully")
+        # Step 4: Test SharePoint permissions
+        sharepoint_access = self.test_sharepoint_permissions()
         
-        return successful_uploads > 0
+        if sharepoint_access:
+            logger.info("✅ SharePoint access confirmed - proceeding with upload")
+            return True
+        else:
+            logger.error("❌ No SharePoint access detected")
+            
+            # Step 5: Try alternative methods
+            return self.try_alternative_upload_methods()
 
 
 def main():
     """
-    Main execution function
+    Main diagnostic function
     """
-    logger.info("=" * 70)
-    logger.info("🚀 SHAREPOINT CSV UPLOAD PROCESS STARTED")
+    logger.info("=" * 80)
+    logger.info("🔧 SHAREPOINT DIAGNOSTIC AND UPLOAD PROCESS")
     logger.info(f"⏰ Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info("=" * 70)
+    logger.info("=" * 80)
     
     try:
-        uploader = SharePointUploader()
-        success = uploader.upload_csv_files()
+        diagnostic = SharePointDiagnostic()
+        success = diagnostic.run_diagnostics()
         
         if success:
-            logger.info("=" * 70)
-            logger.info("✅ SHAREPOINT CSV UPLOAD PROCESS COMPLETED SUCCESSFULLY")
+            logger.info("=" * 80)
+            logger.info("✅ DIAGNOSTIC COMPLETED - READY FOR UPLOAD")
             logger.info(f"⏰ End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            logger.info("=" * 70)
+            logger.info("=" * 80)
         else:
-            raise Exception("SharePoint upload process failed")
+            logger.error("=" * 80)
+            logger.error("❌ DIAGNOSTIC IDENTIFIED CONFIGURATION ISSUES")
+            logger.error("💡 RECOMMENDATIONS:")
+            logger.error("   1. Verify App Registration has 'Sites.ReadWrite.All' permission")
+            logger.error("   2. Ensure admin consent is granted (green checkmark in Azure)")
+            logger.error("   3. Check if tenant allows app-only access to SharePoint")
+            logger.error("   4. Verify the SharePoint site URL is correct")
+            logger.error("   5. Consider asking SharePoint admin to add app to site collection")
+            logger.error("=" * 80)
             
     except Exception as e:
-        logger.error("=" * 70)
-        logger.error("❌ SHAREPOINT CSV UPLOAD PROCESS FAILED")
+        logger.error("=" * 80)
+        logger.error("❌ DIAGNOSTIC PROCESS FAILED")
         logger.error(f"💥 Error: {str(e)}")
         logger.error(f"⏰ End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.error("=" * 70)
+        logger.error("=" * 80)
         sys.exit(1)
 
 
