@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple SharePoint Uploader - Basic Auth Only
-Removes NTLM complexity and focuses on working basic authentication
+SharePoint CSV Uploader - Working Version
+Fixed authentication fallback logic
 """
 
 import os
@@ -11,8 +11,8 @@ import glob
 from datetime import datetime
 import base64
 
-class SimpleSharePointUploader:
-    """Simple SharePoint uploader using only basic authentication"""
+class SharePointBasicUploader:
+    """SharePoint uploader with proper authentication fallback"""
     
     def __init__(self):
         self.username = os.getenv('M365_USERNAME')
@@ -23,113 +23,149 @@ class SimpleSharePointUploader:
         # Clean up site URL
         if self.site_url and self.site_url.endswith('/'):
             self.site_url = self.site_url[:-1]
-        
-        # Create auth header once
-        auth_string = f"{self.username}:{self.password}"
-        auth_bytes = auth_string.encode('utf-8')
-        self.auth_header = base64.b64encode(auth_bytes).decode('utf-8')
-        
+            
         self.session = requests.Session()
         self.form_digest = None
         
-        print(f"🌐 Site: {self.site_url}")
-        print(f"👤 User: {self.username}")
-        print(f"📁 Folder: {self.folder_path}")
-        print()
-        
     def get_form_digest(self):
-        """Get form digest using basic authentication"""
-        print("🔐 Getting SharePoint form digest (Basic Auth)...")
+        """Get form digest with proper fallback logic"""
+        print("🔐 Getting SharePoint form digest...")
         
         digest_url = f"{self.site_url}/_api/contextinfo"
+        print(f"   📡 Requesting: {digest_url}")
         
-        headers = {
-            'Authorization': f'Basic {self.auth_header}',
-            'Accept': 'application/json;odata=verbose',
-            'Content-Type': 'application/json;odata=verbose',
-            'User-Agent': 'Python-SharePoint-Uploader/1.0'
-        }
-        
+        # Try NTLM first (if available)
         try:
-            print(f"   📡 POST {digest_url}")
+            from requests_ntlm import HttpNtlmAuth
+            print("   🔑 Trying NTLM authentication...")
             
-            response = requests.post(
-                digest_url, 
-                headers=headers, 
-                timeout=30,
-                verify=True
+            auth = HttpNtlmAuth(self.username, self.password)
+            
+            response = self.session.post(
+                digest_url,
+                auth=auth,
+                headers={
+                    'Accept': 'application/json;odata=verbose',
+                    'Content-Type': 'application/json;odata=verbose'
+                },
+                timeout=30
             )
             
-            print(f"   📊 Response: {response.status_code}")
+            print(f"   📊 NTLM Response: {response.status_code}")
             
             if response.status_code == 200:
                 try:
                     data = response.json()
                     self.form_digest = data['d']['GetContextWebInformation']['FormDigestValue']
-                    print(f"   ✅ Form digest obtained (length: {len(self.form_digest)})")
+                    print("   ✅ NTLM form digest obtained")
                     return True
-                except Exception as parse_error:
-                    print(f"   ❌ JSON parse error: {parse_error}")
+                except Exception as e:
+                    print(f"   ⚠️  NTLM JSON parse error: {e}")
+            else:
+                print(f"   ⚠️  NTLM failed with {response.status_code}, trying basic auth...")
+                
+        except ImportError:
+            print("   ⚠️  requests-ntlm not available, trying basic auth...")
+        except Exception as e:
+            print(f"   ⚠️  NTLM error: {e}, trying basic auth...")
+        
+        # ALWAYS try basic auth as fallback
+        return self._try_basic_auth_digest()
+    
+    def _try_basic_auth_digest(self):
+        """Basic authentication fallback"""
+        print("   🔑 Trying Basic authentication...")
+        
+        digest_url = f"{self.site_url}/_api/contextinfo"
+        
+        try:
+            # Create basic auth header
+            auth_string = f"{self.username}:{self.password}"
+            auth_bytes = auth_string.encode('utf-8')
+            auth_b64 = base64.b64encode(auth_bytes).decode('utf-8')
+            
+            response = self.session.post(
+                digest_url,
+                headers={
+                    'Authorization': f'Basic {auth_b64}',
+                    'Accept': 'application/json;odata=verbose',
+                    'Content-Type': 'application/json;odata=verbose',
+                    'User-Agent': 'Python-SharePoint-Uploader/1.0'
+                },
+                timeout=30
+            )
+            
+            print(f"   📊 Basic Auth Response: {response.status_code}")
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    self.form_digest = data['d']['GetContextWebInformation']['FormDigestValue']
+                    print("   ✅ Basic auth form digest obtained")
+                    return True
+                except Exception as e:
+                    print(f"   ❌ Basic auth JSON parse error: {e}")
                     print(f"   Raw response: {response.text[:300]}")
                     return False
                     
             elif response.status_code == 401:
-                print("   ❌ Authentication failed - Check username/password")
-                print("   🔍 Verify M365_USERNAME and M365_PASSWORD secrets")
-                return False
+                print("   ❌ Basic auth failed: Invalid credentials")
+                print("   🔍 Check M365_USERNAME and M365_PASSWORD secrets")
                 
             elif response.status_code == 403:
-                print("   ❌ Access forbidden - Check permissions")
-                print("   🔍 User needs 'Contribute' or 'Edit' permissions on the site")
-                print(f"   🔍 Site URL: {self.site_url}")
-                return False
+                print("   ❌ Basic auth failed: Access forbidden")
+                print("   🔍 Check user permissions on SharePoint site")
+                print(f"   🔍 Site: {self.site_url}")
                 
             elif response.status_code == 404:
-                print("   ❌ Site not found")
-                print("   🔍 Check SHAREPOINT_SITE_URL - should be full site URL")
+                print("   ❌ Basic auth failed: Site not found")
+                print("   🔍 Check SHAREPOINT_SITE_URL format")
                 print(f"   🔍 Current: {self.site_url}")
-                return False
                 
             else:
-                print(f"   ❌ Unexpected response: {response.status_code}")
-                print(f"   Headers: {dict(response.headers)}")
-                print(f"   Body: {response.text[:500]}")
-                return False
+                print(f"   ❌ Basic auth failed: HTTP {response.status_code}")
                 
-        except requests.exceptions.Timeout:
-            print("   ❌ Request timeout - Site may be slow or unreachable")
+            print(f"   🔍 Response: {response.text[:200]}...")
             return False
-        except requests.exceptions.ConnectionError:
-            print("   ❌ Connection error - Check site URL and internet connection")
-            return False
+                
         except Exception as e:
-            print(f"   ❌ Unexpected error: {e}")
+            print(f"   ❌ Basic auth error: {e}")
             return False
     
-    def upload_file(self, file_path):
-        """Upload a single file"""
-        filename = os.path.basename(file_path)
-        print(f"📤 Uploading: {filename}")
-        
-        # Ensure we have form digest
+    def upload_file(self, file_path, filename=None):
+        """Upload file with authentication"""
         if not self.form_digest:
             if not self.get_form_digest():
                 return False
+        
+        if not filename:
+            filename = os.path.basename(file_path)
+        
+        print(f"📤 Uploading: {filename}")
         
         # Read file
         try:
             with open(file_path, 'rb') as f:
                 file_content = f.read()
-            print(f"   📏 File size: {len(file_content)} bytes")
+            print(f"   📏 Size: {len(file_content)} bytes")
         except Exception as e:
-            print(f"   ❌ Failed to read file: {e}")
+            print(f"   ❌ Read error: {e}")
             return False
         
-        # Upload
+        # Upload with same auth that worked for form digest
         upload_url = f"{self.site_url}/_api/web/getfolderbyserverrelativeurl('{self.folder_path}')/files/add(url='{filename}',overwrite=true)"
         
+        # Try basic auth (most likely to work)
+        return self._upload_basic_auth(upload_url, file_content, filename)
+    
+    def _upload_basic_auth(self, upload_url, file_content, filename):
+        """Upload using basic authentication"""
+        auth_string = f"{self.username}:{self.password}"
+        auth_bytes = auth_string.encode('utf-8')
+        auth_b64 = base64.b64encode(auth_bytes).decode('utf-8')
+        
         headers = {
-            'Authorization': f'Basic {self.auth_header}',
+            'Authorization': f'Basic {auth_b64}',
             'Accept': 'application/json;odata=verbose',
             'X-RequestDigest': self.form_digest,
             'Content-Type': 'application/octet-stream'
@@ -138,73 +174,61 @@ class SimpleSharePointUploader:
         try:
             print(f"   📡 Uploading to SharePoint...")
             
-            response = requests.post(
+            response = self.session.post(
                 upload_url,
                 headers=headers,
                 data=file_content,
-                timeout=120  # 2 minutes for large files
+                timeout=120
             )
+            
+            print(f"   📊 Upload Response: {response.status_code}")
             
             if response.status_code in [200, 201]:
                 print(f"   ✅ Upload successful!")
-                try:
-                    data = response.json()
-                    server_url = data.get('d', {}).get('ServerRelativeUrl', '')
-                    if server_url:
-                        print(f"   📍 SharePoint URL: {server_url}")
-                except:
-                    pass
                 return True
             else:
                 print(f"   ❌ Upload failed: {response.status_code}")
                 if response.status_code == 404:
                     print(f"   🔍 Check folder path: {self.folder_path}")
                 elif response.status_code == 403:
-                    print("   🔍 Check write permissions to folder")
-                print(f"   Response: {response.text[:300]}")
+                    print("   🔍 Check write permissions")
+                print(f"   Response: {response.text[:200]}")
                 return False
                 
         except Exception as e:
             print(f"   ❌ Upload error: {e}")
             return False
     
-    def upload_csv_files(self):
+    def upload_csv_files(self, directory="data/upload"):
         """Upload all CSV files"""
-        csv_directory = "data/upload"
-        print(f"🔍 Looking for CSV files in {csv_directory}...")
+        print(f"🔍 Looking for CSV files in {directory}...")
         
-        csv_files = glob.glob(f"{csv_directory}/*.csv")
+        csv_files = glob.glob(f"{directory}/*.csv")
         if not csv_files:
             print(f"   ❌ No CSV files found")
             return False
         
-        print(f"   📊 Found {len(csv_files)} CSV files:")
-        for csv_file in csv_files:
-            print(f"      - {os.path.basename(csv_file)}")
+        print(f"   📊 Found {len(csv_files)} CSV files")
+        for f in csv_files:
+            print(f"      - {os.path.basename(f)}")
         print()
         
         success_count = 0
         
         for csv_file in csv_files:
-            print("=" * 50)
+            print(f"{'='*60}")
             if self.upload_file(csv_file):
                 success_count += 1
-                print(f"   🎉 {os.path.basename(csv_file)} uploaded successfully")
-            else:
-                print(f"   💥 {os.path.basename(csv_file)} upload failed")
             print()
         
-        print("=" * 50)
-        print(f"📊 UPLOAD SUMMARY:")
-        print(f"   Total files: {len(csv_files)}")
-        print(f"   Successful: {success_count}")
-        print(f"   Failed: {len(csv_files) - success_count}")
+        print(f"{'='*60}")
+        print(f"📊 SUMMARY: {success_count}/{len(csv_files)} successful")
         
         return success_count > 0
 
 def main():
     """Main function"""
-    print("🚀 SIMPLE SHAREPOINT CSV UPLOADER")
+    print("🚀 SHAREPOINT CSV UPLOADER (WORKING VERSION)")
     print("=" * 50)
     print(f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
@@ -219,14 +243,20 @@ def main():
             print(f"   - {var}")
         return False
     
-    # Upload
-    uploader = SimpleSharePointUploader()
+    # Initialize
+    uploader = SharePointBasicUploader()
     
+    print(f"🌐 Site: {uploader.site_url}")
+    print(f"👤 User: {uploader.username}")
+    print(f"📁 Folder: {uploader.folder_path}")
+    print()
+    
+    # Upload
     if uploader.upload_csv_files():
-        print("🎉 ALL UPLOADS SUCCESSFUL!")
+        print("🎉 UPLOADS SUCCESSFUL!")
         return True
     else:
-        print("❌ SOME UPLOADS FAILED")
+        print("❌ UPLOADS FAILED")
         return False
 
 if __name__ == "__main__":
