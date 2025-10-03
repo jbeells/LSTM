@@ -33,23 +33,25 @@ jobs:
         python-version: '3.11'
         cache: 'pip'
     
-    # NEW: Set up Node.js for Microsoft 365 CLI
-    - name: Set up Node.js
+    # UPDATED: Use Node.js 20 (required for M365 CLI)
+    - name: Set up Node.js 20
       uses: actions/setup-node@v4
       with:
-        node-version: '18'
+        node-version: '20'
     
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         
-    # NEW: Install Microsoft 365 CLI
+    # Install Microsoft 365 CLI (now compatible with Node.js 20)
     - name: Install Microsoft 365 CLI
       run: |
         npm install -g @pnp/cli-microsoft365
         echo "M365 CLI version:"
         m365 --version
+        echo "Node.js version:"
+        node --version
         
     - name: Verify project structure
       run: |
@@ -134,7 +136,7 @@ jobs:
           echo "✗ Model metrics missing"
         fi
     
-    # UPDATED: Authenticate with Microsoft 365 CLI
+    # Authenticate with Microsoft 365 CLI
     - name: Authenticate with Microsoft 365
       if: success()
       env:
@@ -147,32 +149,27 @@ jobs:
         # Method 1: Try username/password authentication
         if [ -n "$M365_USERNAME" ] && [ -n "$M365_PASSWORD" ]; then
           echo "Attempting username/password authentication..."
-          echo "$M365_PASSWORD" | m365 login --authType password --userName "$M365_USERNAME" || echo "Password auth failed, will try certificate"
+          echo "Username: $M365_USERNAME"
+          
+          # Use password authentication with proper input handling
+          echo "$M365_PASSWORD" | m365 login --authType password --userName "$M365_USERNAME"
+          
+          if [ $? -eq 0 ]; then
+            echo "✓ Password authentication successful"
+          else
+            echo "✗ Password authentication failed"
+            exit 1
+          fi
+        else
+          echo "✗ M365 credentials not found in secrets"
+          exit 1
         fi
         
-        # Method 2: Try certificate authentication (if configured)
-        if [ -n "${{ secrets.M365_CERTIFICATE }}" ] && [ -n "${{ secrets.M365_CERTIFICATE_PASSWORD }}" ]; then
-          echo "Setting up certificate authentication..."
-          
-          # Create temporary certificate file
-          echo "${{ secrets.M365_CERTIFICATE }}" | base64 -d > /tmp/cert.pfx
-          
-          # Authenticate using certificate
-          m365 login \
-            --authType certificate \
-            --certificateFile /tmp/cert.pfx \
-            --password "${{ secrets.M365_CERTIFICATE_PASSWORD }}" \
-            --appId "${{ secrets.M365_APP_ID }}"
-            
-          # Clean up certificate file
-          rm -f /tmp/cert.pfx
-        fi
-        
-        # Verify authentication
-        echo "Authentication status:"
+        # Verify authentication status
+        echo "Verifying authentication status..."
         m365 status
         
-    # UPDATED: Upload CSV files using Microsoft 365 CLI
+    # Upload CSV files using Microsoft 365 CLI
     - name: Upload CSV files to SharePoint
       if: success()
       env:
@@ -180,44 +177,94 @@ jobs:
         SHAREPOINT_FOLDER_PATH: ${{ secrets.SHAREPOINT_FOLDER_PATH }}
       run: |
         echo "Uploading CSV files to SharePoint using M365 CLI..."
+        echo "Site URL: $SHAREPOINT_SITE_URL"
         
         # Set default library if folder path not specified
         LIBRARY_NAME="${SHAREPOINT_FOLDER_PATH:-Shared Documents}"
         echo "Target library/folder: $LIBRARY_NAME"
         
-        # Upload each CSV file
+        # Check if data/upload directory exists and has CSV files
+        if [ ! -d "data/upload" ]; then
+          echo "✗ data/upload directory not found"
+          exit 1
+        fi
+        
         cd data/upload
+        csv_count=$(ls -1 *.csv 2>/dev/null | wc -l)
+        
+        if [ $csv_count -eq 0 ]; then
+          echo "✗ No CSV files found in data/upload/"
+          ls -la
+          exit 1
+        fi
+        
+        echo "Found $csv_count CSV files to upload"
+        
+        # Upload each CSV file
+        upload_success=0
+        upload_total=0
         
         for csv_file in *.csv; do
           if [ -f "$csv_file" ]; then
-            echo "Uploading $csv_file..."
+            echo "----------------------------------------"
+            echo "Uploading: $csv_file"
             
             # Generate timestamped filename
             timestamp=$(date +"%Y%m%d_%H%M%S")
-            filename="${csv_file%.*}_${timestamp}.csv"
+            base_name="${csv_file%.*}"
+            filename="${base_name}_${timestamp}.csv"
             
-            # Upload file
-            m365 spo file add \
+            upload_total=$((upload_total + 1))
+            
+            # Upload file with error handling
+            if m365 spo file add \
               --webUrl "$SHAREPOINT_SITE_URL" \
               --folder "$LIBRARY_NAME" \
               --path "$csv_file" \
               --name "$filename" \
-              --output json > upload_result.json
+              --output json > "upload_result_${upload_total}.json"; then
               
-            if [ $? -eq 0 ]; then
               echo "✓ Successfully uploaded: $filename"
-              # Show file details
-              cat upload_result.json | jq -r '.ServerRelativeUrl // "No URL available"'
+              
+              # Show upload details
+              if [ -f "upload_result_${upload_total}.json" ]; then
+                echo "Upload details:"
+                cat "upload_result_${upload_total}.json" | jq -r '.Name // "Unknown name"' | xargs -I {} echo "  File: {}"
+                cat "upload_result_${upload_total}.json" | jq -r '.ServerRelativeUrl // "Unknown URL"' | xargs -I {} echo "  URL: {}"
+                cat "upload_result_${upload_total}.json" | jq -r '.Length // "Unknown size"' | xargs -I {} echo "  Size: {} bytes"
+              fi
+              
+              upload_success=$((upload_success + 1))
             else
               echo "✗ Failed to upload: $csv_file"
-              cat upload_result.json || echo "No upload result available"
+              if [ -f "upload_result_${upload_total}.json" ]; then
+                echo "Error details:"
+                cat "upload_result_${upload_total}.json"
+              fi
             fi
             
-            rm -f upload_result.json
+            # Clean up result file
+            rm -f "upload_result_${upload_total}.json"
           fi
         done
         
-    # NEW: Cleanup M365 authentication
+        echo "----------------------------------------"
+        echo "Upload Summary:"
+        echo "Total files: $upload_total"
+        echo "Successful uploads: $upload_success"
+        echo "Failed uploads: $((upload_total - upload_success))"
+        
+        if [ $upload_success -eq 0 ]; then
+          echo "✗ No files were uploaded successfully"
+          exit 1
+        elif [ $upload_success -lt $upload_total ]; then
+          echo "⚠ Some files failed to upload"
+          exit 0  # Don't fail the workflow for partial success
+        else
+          echo "✓ All files uploaded successfully"
+        fi
+        
+    # Cleanup M365 authentication
     - name: Logout from Microsoft 365
       if: always()
       run: |
@@ -227,11 +274,13 @@ jobs:
     - name: SharePoint upload summary
       if: success()
       run: |
-        echo "✓ CSV files successfully uploaded to SharePoint"
+        echo "==============================================="
+        echo "✓ CSV UPLOAD SUCCESSFUL"
         echo "Site: ${{ secrets.SHAREPOINT_SITE_URL }}"
         echo "Library: ${{ secrets.SHAREPOINT_FOLDER_PATH }}"
         echo "Upload method: Microsoft 365 CLI"
-        echo "Upload timestamp: $(date -u)"
+        echo "Upload timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        echo "==============================================="
         
     - name: Summary
       if: always()
