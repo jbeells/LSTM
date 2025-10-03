@@ -33,10 +33,23 @@ jobs:
         python-version: '3.11'
         cache: 'pip'
     
+    # NEW: Set up Node.js for Microsoft 365 CLI
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        
+    # NEW: Install Microsoft 365 CLI
+    - name: Install Microsoft 365 CLI
+      run: |
+        npm install -g @pnp/cli-microsoft365
+        echo "M365 CLI version:"
+        m365 --version
         
     - name: Verify project structure
       run: |
@@ -120,29 +133,104 @@ jobs:
         else
           echo "✗ Model metrics missing"
         fi
-        
-    - name: Install SharePoint upload dependencies
+    
+    # UPDATED: Authenticate with Microsoft 365 CLI
+    - name: Authenticate with Microsoft 365
       if: success()
+      env:
+        M365_USERNAME: ${{ secrets.M365_USERNAME }}
+        M365_PASSWORD: ${{ secrets.M365_PASSWORD }}
+        SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
       run: |
-        pip install requests
+        echo "Authenticating with Microsoft 365..."
         
+        # Method 1: Try username/password authentication
+        if [ -n "$M365_USERNAME" ] && [ -n "$M365_PASSWORD" ]; then
+          echo "Attempting username/password authentication..."
+          echo "$M365_PASSWORD" | m365 login --authType password --userName "$M365_USERNAME" || echo "Password auth failed, will try certificate"
+        fi
+        
+        # Method 2: Try certificate authentication (if configured)
+        if [ -n "${{ secrets.M365_CERTIFICATE }}" ] && [ -n "${{ secrets.M365_CERTIFICATE_PASSWORD }}" ]; then
+          echo "Setting up certificate authentication..."
+          
+          # Create temporary certificate file
+          echo "${{ secrets.M365_CERTIFICATE }}" | base64 -d > /tmp/cert.pfx
+          
+          # Authenticate using certificate
+          m365 login \
+            --authType certificate \
+            --certificateFile /tmp/cert.pfx \
+            --password "${{ secrets.M365_CERTIFICATE_PASSWORD }}" \
+            --appId "${{ secrets.M365_APP_ID }}"
+            
+          # Clean up certificate file
+          rm -f /tmp/cert.pfx
+        fi
+        
+        # Verify authentication
+        echo "Authentication status:"
+        m365 status
+        
+    # UPDATED: Upload CSV files using Microsoft 365 CLI
     - name: Upload CSV files to SharePoint
       if: success()
       env:
         SHAREPOINT_SITE_URL: ${{ secrets.SHAREPOINT_SITE_URL }}
         SHAREPOINT_FOLDER_PATH: ${{ secrets.SHAREPOINT_FOLDER_PATH }}
-        SHAREPOINT_TENANT_ID: ${{ secrets.SHAREPOINT_TENANT_ID }}
-        SHAREPOINT_CLIENT_ID: ${{ secrets.SHAREPOINT_CLIENT_ID }}
-        SHAREPOINT_CLIENT_SECRET: ${{ secrets.SHAREPOINT_CLIENT_SECRET }}
       run: |
-        cd src
-        python daily_sharepoint_uploader.py
+        echo "Uploading CSV files to SharePoint using M365 CLI..."
+        
+        # Set default library if folder path not specified
+        LIBRARY_NAME="${SHAREPOINT_FOLDER_PATH:-Shared Documents}"
+        echo "Target library/folder: $LIBRARY_NAME"
+        
+        # Upload each CSV file
+        cd data/upload
+        
+        for csv_file in *.csv; do
+          if [ -f "$csv_file" ]; then
+            echo "Uploading $csv_file..."
+            
+            # Generate timestamped filename
+            timestamp=$(date +"%Y%m%d_%H%M%S")
+            filename="${csv_file%.*}_${timestamp}.csv"
+            
+            # Upload file
+            m365 spo file add \
+              --webUrl "$SHAREPOINT_SITE_URL" \
+              --folder "$LIBRARY_NAME" \
+              --path "$csv_file" \
+              --name "$filename" \
+              --output json > upload_result.json
+              
+            if [ $? -eq 0 ]; then
+              echo "✓ Successfully uploaded: $filename"
+              # Show file details
+              cat upload_result.json | jq -r '.ServerRelativeUrl // "No URL available"'
+            else
+              echo "✗ Failed to upload: $csv_file"
+              cat upload_result.json || echo "No upload result available"
+            fi
+            
+            rm -f upload_result.json
+          fi
+        done
+        
+    # NEW: Cleanup M365 authentication
+    - name: Logout from Microsoft 365
+      if: always()
+      run: |
+        echo "Cleaning up M365 session..."
+        m365 logout || echo "Logout failed or already logged out"
         
     - name: SharePoint upload summary
       if: success()
       run: |
         echo "✓ CSV files successfully uploaded to SharePoint"
         echo "Site: ${{ secrets.SHAREPOINT_SITE_URL }}"
+        echo "Library: ${{ secrets.SHAREPOINT_FOLDER_PATH }}"
+        echo "Upload method: Microsoft 365 CLI"
         echo "Upload timestamp: $(date -u)"
         
     - name: Summary
