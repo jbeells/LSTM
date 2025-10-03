@@ -1,305 +1,275 @@
 #!/usr/bin/env python3
 """
-SharePoint CSV Uploader using Microsoft 365 CLI
-This bypasses app-only authentication restrictions by using the M365 CLI
+SharePoint CSV Uploader - Daily Overwrite Version
+Files are overwritten each day with the same names
 """
 
 import os
-import pandas as pd
-import subprocess
+import requests
 import json
-import tempfile
-from datetime import datetime, timedelta
-import logging
+import glob
+from datetime import datetime
+import base64
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-class M365SharePointUploader:
-    """SharePoint uploader using Microsoft 365 CLI"""
+class SharePointBasicUploader:
+    """SharePoint uploader using basic authentication"""
     
     def __init__(self):
-        self.site_url = os.getenv('SHAREPOINT_SITE_URL', 'https://jeanalytics.sharepoint.com/sites/LSTM')
-        self.is_authenticated = False
-        self.cli_available = False
-    
-    def check_cli_installation(self):
-        """Check if Microsoft 365 CLI is installed"""
-        logger.info("🔧 Checking Microsoft 365 CLI installation...")
+        self.username = os.getenv('M365_USERNAME')
+        self.password = os.getenv('M365_PASSWORD')
+        self.site_url = os.getenv('SHAREPOINT_SITE_URL')
+        self.folder_path = os.getenv('SHAREPOINT_FOLDER_PATH', 'Shared Documents')
         
-        try:
-            result = subprocess.run(['m365', '--version'], 
-                                  capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                version = result.stdout.strip()
-                logger.info(f"   ✅ M365 CLI installed: {version}")
-                self.cli_available = True
-                return True
-            else:
-                logger.error("   ❌ M365 CLI not responding properly")
-                return False
-        except FileNotFoundError:
-            logger.error("   ❌ Microsoft 365 CLI not found")
-            logger.info("   💡 Install with: npm install -g @pnp/cli-microsoft365")
-            return False
-        except subprocess.TimeoutExpired:
-            logger.error("   ❌ M365 CLI command timed out")
-            return False
-        except Exception as e:
-            logger.error(f"   ❌ CLI check failed: {e}")
-            return False
-    
-    def authenticate(self):
-        """Authenticate with Microsoft 365"""
-        if not self.cli_available:
-            logger.error("M365 CLI not available")
-            return False
-        
-        logger.info("🔑 Authenticating with Microsoft 365...")
-        
-        # Check if already logged in
-        try:
-            result = subprocess.run(['m365', 'status'], 
-                                  capture_output=True, text=True, timeout=30)
-            if result.returncode == 0:
-                status_data = json.loads(result.stdout)
-                if status_data.get('connectedAs'):
-                    logger.info(f"   ✅ Already authenticated as: {status_data.get('connectedAs')}")
-                    self.is_authenticated = True
-                    return True
-        except Exception as e:
-            logger.info(f"   Status check failed, proceeding with login: {e}")
-        
-        # Authenticate using device code flow
-        logger.info("   Starting device code authentication...")
-        try:
-            result = subprocess.run(['m365', 'login', '--authType', 'deviceCode'], 
-                                  capture_output=True, text=True, timeout=300)  # 5 minute timeout
+        # Clean up site URL
+        if self.site_url and self.site_url.endswith('/'):
+            self.site_url = self.site_url[:-1]
             
-            if result.returncode == 0:
-                logger.info("   ✅ Authentication successful")
-                self.is_authenticated = True
+        self.session = requests.Session()
+        self.form_digest = None
+        
+    def get_form_digest(self):
+        """Get form digest token for SharePoint operations"""
+        print("🔐 Getting SharePoint form digest...")
+        
+        digest_url = f"{self.site_url}/_api/contextinfo"
+        
+        try:
+            # Try NTLM authentication first
+            from requests_ntlm import HttpNtlmAuth
+            auth = HttpNtlmAuth(self.username, self.password)
+            
+            response = self.session.post(
+                digest_url,
+                auth=auth,
+                headers={
+                    'Accept': 'application/json;odata=verbose',
+                    'Content-Type': 'application/json;odata=verbose'
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                self.form_digest = data['d']['GetContextWebInformation']['FormDigestValue']
+                print("   ✅ NTLM form digest obtained")
                 return True
             else:
-                logger.error(f"   ❌ Authentication failed: {result.stderr}")
+                print(f"   ❌ NTLM form digest failed: {response.status_code}")
                 return False
                 
-        except subprocess.TimeoutExpired:
-            logger.error("   ❌ Authentication timed out")
-            return False
+        except ImportError:
+            print("   ⚠️  requests-ntlm not available, trying basic auth...")
+            return self._try_basic_auth_digest()
         except Exception as e:
-            logger.error(f"   ❌ Authentication exception: {e}")
-            return False
+            print(f"   ❌ NTLM form digest error: {e}")
+            return self._try_basic_auth_digest()
     
-    def test_site_access(self):
-        """Test if we can access the SharePoint site"""
-        if not self.is_authenticated:
-            logger.error("Not authenticated")
-            return False
-        
-        logger.info("🏢 Testing SharePoint site access...")
+    def _try_basic_auth_digest(self):
+        """Fallback to basic authentication"""
+        digest_url = f"{self.site_url}/_api/contextinfo"
         
         try:
-            # Get site information
-            result = subprocess.run(['m365', 'spo', 'site', 'get', 
-                                   '--url', self.site_url, '--output', 'json'], 
-                                  capture_output=True, text=True, timeout=60)
+            # Basic authentication
+            auth_string = f"{self.username}:{self.password}"
+            auth_bytes = auth_string.encode('utf-8')
+            auth_b64 = base64.b64encode(auth_bytes).decode('utf-8')
             
-            if result.returncode == 0:
-                site_data = json.loads(result.stdout)
-                site_title = site_data.get('Title', 'Unknown')
-                logger.info(f"   ✅ Site access successful: {site_title}")
-                logger.info(f"   Site ID: {site_data.get('Id', 'Unknown')}")
+            response = self.session.post(
+                digest_url,
+                headers={
+                    'Authorization': f'Basic {auth_b64}',
+                    'Accept': 'application/json;odata=verbose',
+                    'Content-Type': 'application/json;odata=verbose'
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                self.form_digest = data['d']['GetContextWebInformation']['FormDigestValue']
+                print("   ✅ Basic auth form digest obtained")
                 return True
             else:
-                logger.error(f"   ❌ Site access failed: {result.stderr}")
+                print(f"   ❌ Basic auth digest failed: {response.status_code}")
+                print(f"   Response: {response.text[:200]}...")
                 return False
                 
         except Exception as e:
-            logger.error(f"   ❌ Site access exception: {e}")
+            print(f"   ❌ Basic auth digest error: {e}")
             return False
     
-    def upload_csv_file(self, df, filename=None):
-        """Upload CSV file to SharePoint document library"""
-        if not self.is_authenticated:
-            logger.error("Not authenticated")
-            return False
+    def upload_file(self, file_path, filename=None):
+        """Upload a single file to SharePoint (overwrite existing)"""
+        if not self.form_digest:
+            if not self.get_form_digest():
+                return False
         
-        # Generate filename if not provided
         if not filename:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"lstm_forecast_{timestamp}.csv"
+            filename = os.path.basename(file_path)
         
-        logger.info(f"📤 Uploading file: {filename}")
+        print(f"📤 Uploading: {filename} (overwrite=true)")
         
-        # Create temporary CSV file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
-            df.to_csv(temp_file.name, index=False)
-            temp_filepath = temp_file.name
+        # Read file content
+        try:
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+        except Exception as e:
+            print(f"   ❌ Failed to read file: {e}")
+            return False
+        
+        # Upload URL with overwrite=true
+        upload_url = f"{self.site_url}/_api/web/getfolderbyserverrelativeurl('{self.folder_path}')/files/add(url='{filename}',overwrite=true)"
         
         try:
-            # Upload file to SharePoint
-            # Default document library is usually "Shared Documents" or "Documents"
-            library_name = "Shared Documents"  # Common default
+            headers = {
+                'Accept': 'application/json;odata=verbose',
+                'X-RequestDigest': self.form_digest,
+                'Content-Type': 'application/octet-stream'
+            }
             
-            result = subprocess.run([
-                'm365', 'spo', 'file', 'add',
-                '--webUrl', self.site_url,
-                '--folder', library_name,
-                '--path', temp_filepath,
-                '--name', filename,
-                '--output', 'json'
-            ], capture_output=True, text=True, timeout=120)
-            
-            if result.returncode == 0:
-                file_data = json.loads(result.stdout)
-                file_url = file_data.get('ServerRelativeUrl', 'Unknown')
-                file_size = os.path.getsize(temp_filepath)
+            # Try NTLM authentication first
+            try:
+                from requests_ntlm import HttpNtlmAuth
+                auth = HttpNtlmAuth(self.username, self.password)
                 
-                logger.info(f"   ✅ File uploaded successfully")
-                logger.info(f"   ✅ File path: {file_url}")
-                logger.info(f"   ✅ File size: {file_size} bytes")
-                logger.info(f"   ✅ SharePoint URL: {self.site_url}")
+                response = self.session.post(
+                    upload_url,
+                    auth=auth,
+                    headers=headers,
+                    data=file_content
+                )
+                
+            except ImportError:
+                # Fallback to basic authentication
+                auth_string = f"{self.username}:{self.password}"
+                auth_bytes = auth_string.encode('utf-8')
+                auth_b64 = base64.b64encode(auth_bytes).decode('utf-8')
+                headers['Authorization'] = f'Basic {auth_b64}'
+                
+                response = self.session.post(
+                    upload_url,
+                    headers=headers,
+                    data=file_content
+                )
+            
+            if response.status_code in [200, 201]:
+                print(f"   ✅ Upload successful - File overwritten")
+                
+                # Parse response for details
+                try:
+                    data = response.json()
+                    server_url = data.get('d', {}).get('ServerRelativeUrl', 'Unknown')
+                    file_size = len(file_content)
+                    print(f"   📍 URL: {server_url}")
+                    print(f"   📏 Size: {file_size} bytes")
+                    
+                    # Get last modified time from response if available
+                    time_modified = data.get('d', {}).get('TimeLastModified', None)
+                    if time_modified:
+                        print(f"   🕒 Modified: {time_modified}")
+                        
+                except Exception as parse_error:
+                    print(f"   📏 Size: {len(file_content)} bytes")
+                    print(f"   ⚠️  Could not parse response details: {parse_error}")
                 
                 return True
             else:
-                # Try alternative document library names
-                alternative_libraries = ["Documents", "DocumentLibrary", "Documenti"]
-                
-                for lib_name in alternative_libraries:
-                    logger.info(f"   Trying alternative library: {lib_name}")
-                    
-                    alt_result = subprocess.run([
-                        'm365', 'spo', 'file', 'add',
-                        '--webUrl', self.site_url,
-                        '--folder', lib_name,
-                        '--path', temp_filepath,
-                        '--name', filename,
-                        '--output', 'json'
-                    ], capture_output=True, text=True, timeout=120)
-                    
-                    if alt_result.returncode == 0:
-                        file_data = json.loads(alt_result.stdout)
-                        file_url = file_data.get('ServerRelativeUrl', 'Unknown')
-                        
-                        logger.info(f"   ✅ File uploaded to {lib_name}")
-                        logger.info(f"   ✅ File path: {file_url}")
-                        
-                        return True
-                
-                logger.error(f"   ❌ Upload failed to all libraries: {result.stderr}")
+                print(f"   ❌ Upload failed: HTTP {response.status_code}")
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('error', {}).get('message', {}).get('value', 'Unknown error')
+                    print(f"   Error: {error_msg}")
+                except:
+                    print(f"   Response: {response.text[:300]}...")
                 return False
                 
         except Exception as e:
-            logger.error(f"   ❌ Upload exception: {e}")
+            print(f"   ❌ Upload error: {e}")
             return False
-        finally:
-            # Clean up temporary file
-            try:
-                os.unlink(temp_filepath)
-            except:
-                pass
+    
+    def upload_csv_files(self, directory="data/upload"):
+        """Upload all CSV files from directory (daily overwrite)"""
+        print(f"🔍 Looking for CSV files in {directory}...")
+        
+        csv_files = glob.glob(f"{directory}/*.csv")
+        if not csv_files:
+            print(f"   ❌ No CSV files found in {directory}")
+            return False
+        
+        print(f"   📊 Found {len(csv_files)} CSV files")
+        print("   📝 Files will overwrite existing versions in SharePoint")
+        
+        success_count = 0
+        total_count = len(csv_files)
+        
+        for csv_file in csv_files:
+            print(f"\n{'='*60}")
+            if self.upload_file(csv_file):
+                success_count += 1
+            else:
+                print(f"   ❌ Failed to upload {os.path.basename(csv_file)}")
+        
+        print(f"\n{'='*60}")
+        print(f"📊 DAILY UPLOAD SUMMARY")
+        print(f"Total files: {total_count}")
+        print(f"Successful: {success_count}")
+        print(f"Failed: {total_count - success_count}")
+        
+        if success_count == total_count:
+            print("🎉 All files uploaded successfully!")
+        elif success_count > 0:
+            print("⚠️  Some files uploaded successfully, check logs above")
+        else:
+            print("❌ No files uploaded successfully")
+            
+        print(f"{'='*60}")
+        
+        return success_count > 0
 
-def generate_forecast_data():
-    """Generate sample LSTM forecast data"""
-    logger.info("📊 Generating LSTM forecast data...")
+def validate_environment():
+    """Validate required environment variables"""
+    required_vars = ['M365_USERNAME', 'M365_PASSWORD', 'SHAREPOINT_SITE_URL']
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
     
-    import numpy as np
+    if missing_vars:
+        print("❌ Missing required environment variables:")
+        for var in missing_vars:
+            print(f"   - {var}")
+        return False
     
-    # Generate 30 days of forecast data
-    base_date = datetime.now().date()
-    dates = [base_date + timedelta(days=i) for i in range(30)]
-    
-    # Generate realistic forecast values
-    np.random.seed(42)  # For reproducible results
-    
-    trend = np.linspace(100, 120, 30)  # Upward trend
-    seasonality = 10 * np.sin(np.linspace(0, 4*np.pi, 30))  # Weekly seasonality
-    noise = np.random.normal(0, 5, 30)  # Random noise
-    
-    values = trend + seasonality + noise
-    
-    # Create confidence intervals
-    lower_bounds = values - np.random.uniform(5, 15, 30)
-    upper_bounds = values + np.random.uniform(5, 15, 30)
-    
-    # Create DataFrame
-    df = pd.DataFrame({
-        'Date': dates,
-        'Forecast_Value': np.round(values, 2),
-        'Lower_Bound_95': np.round(lower_bounds, 2),
-        'Upper_Bound_95': np.round(upper_bounds, 2),
-        'Model_Version': '1.2.0',
-        'Training_Date': datetime.now().strftime('%Y-%m-%d'),
-        'Generated_At': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'Confidence_Score': np.round(np.random.uniform(0.85, 0.95, 30), 3)
-    })
-    
-    logger.info(f"   ✅ Generated {len(df)} forecast records")
-    
-    return df
+    return True
 
 def main():
-    """Main function to upload CSV using M365 CLI"""
-    print("🚀 SHAREPOINT UPLOADER - MICROSOFT 365 CLI")
-    print("=" * 55)
+    """Main upload function"""
+    print("🚀 DAILY SHAREPOINT CSV UPLOADER")
+    print("=" * 50)
     print(f"⏰ Upload time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("📝 Mode: Daily overwrite (no timestamps)")
     print()
     
+    # Validate environment variables
+    if not validate_environment():
+        return False
+    
+    # Initialize uploader
+    uploader = SharePointBasicUploader()
+    
+    print(f"🌐 Site: {uploader.site_url}")
+    print(f"👤 User: {uploader.username}")
+    print(f"📁 Folder: {uploader.folder_path}")
+    print()
+    
+    # Upload CSV files
     try:
-        # Step 1: Generate forecast data
-        forecast_df = generate_forecast_data()
-        print("Sample forecast data:")
-        print(forecast_df.head().to_string(index=False))
-        print()
-        
-        # Step 2: Initialize M365 uploader
-        uploader = M365SharePointUploader()
-        
-        # Step 3: Check CLI installation
-        if not uploader.check_cli_installation():
-            print("\n❌ SETUP REQUIRED")
-            print("Please install Microsoft 365 CLI:")
-            print("1. Install Node.js if not already installed")
-            print("2. Run: npm install -g @pnp/cli-microsoft365")
-            print("3. Then run this script again")
-            return False
-        
-        # Step 4: Authenticate
-        print()
-        if not uploader.authenticate():
-            print("❌ Authentication failed")
-            return False
-        
-        # Step 5: Test site access
-        print()
-        if not uploader.test_site_access():
-            print("❌ Site access failed")
-            return False
-        
-        # Step 6: Upload file
-        print()
-        if uploader.upload_csv_file(forecast_df):
-            print("\n🎉 SHAREPOINT UPLOAD SUCCESSFUL!")
-            print("✅ CSV file uploaded using M365 CLI")
-            print("✅ This method bypasses app-only restrictions")
+        if uploader.upload_csv_files():
+            print("\n🎉 DAILY UPLOAD SUCCESSFUL!")
+            print("📊 Fresh forecast data is now available in SharePoint")
             return True
         else:
-            print("\n❌ File upload failed")
+            print("\n❌ DAILY UPLOAD FAILED")
             return False
-            
     except Exception as e:
-        logger.error(f"Main process failed: {e}")
+        print(f"\n💥 UNEXPECTED ERROR: {e}")
         return False
 
 if __name__ == "__main__":
     success = main()
-    
-    print("\n" + "=" * 55)
-    if success:
-        print("🎉 SUCCESS! Ready for automation")
-        print("💡 This approach works even with app-only restrictions")
-    else:
-        print("❌ Upload failed - check error messages above")
-    print("=" * 55)
+    exit(0 if success else 1)
