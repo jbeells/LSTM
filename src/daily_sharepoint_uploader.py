@@ -1,89 +1,87 @@
 #!/usr/bin/env python3
 """
-SharePoint Test Script - Configured for your specific app
-App: LSTM-SharePoint-Uploader
-Client ID: 26a6a10b-5718-440c-8d1b-699fc88f7057
+Comprehensive SharePoint diagnostic script
+Get detailed error information and try alternative authentication methods
 """
 
 import os
 import requests
 import json
 from datetime import datetime
+import base64
 
-def test_sharepoint_with_your_config():
-    """Test SharePoint with your specific app configuration"""
+def diagnose_sharepoint_issues():
+    """Comprehensive SharePoint diagnostics"""
     
-    print("🚀 SHAREPOINT TEST - LSTM-SHAREPOINT-UPLOADER")
-    print("=" * 65)
+    print("🔍 SHAREPOINT COMPREHENSIVE DIAGNOSTICS")
+    print("=" * 60)
     print(f"⏰ Test time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     
-    # Your specific configuration
+    # Configuration
     tenant_id = os.getenv('SHAREPOINT_TENANT_ID')
     client_secret = os.getenv('SHAREPOINT_CLIENT_SECRET')
-    
-    # From your Azure screenshots
-    client_id = "26a6a10b-5718-440c-8d1b-699fc88f7057"  # Your actual Client ID
-    app_name = "LSTM-SharePoint-Uploader"
-    
+    client_id = "26a6a10b-5718-440c-8d1b-699fc88f7057"
     site_url = os.getenv('SHAREPOINT_SITE_URL', 'https://jeanalytics.sharepoint.com/sites/LSTM')
     
-    print(f"📋 App Name: {app_name}")
-    print(f"📋 Client ID: {client_id}")
-    print(f"📋 Tenant ID: {tenant_id}")
-    print(f"📋 Site URL: {site_url}")
+    print(f"📋 Tenant: {tenant_id}")
+    print(f"📋 Client: {client_id}")
+    print(f"📋 Site: {site_url}")
     print()
     
-    if not all([tenant_id, client_secret]):
-        print("❌ Missing environment variables (TENANT_ID or CLIENT_SECRET)")
-        return False
+    # Test 1: Token Analysis
+    print("1️⃣ TOKEN ANALYSIS")
+    print("-" * 30)
     
-    # Test authentication methods
-    print("🔑 TESTING AUTHENTICATION METHODS")
-    print("-" * 45)
-    
-    # Method 1: Microsoft Graph API
-    print("1️⃣ Microsoft Graph API")
-    graph_token = get_token(tenant_id, client_id, client_secret, 'https://graph.microsoft.com/.default')
+    graph_token = get_token_with_details(tenant_id, client_id, client_secret, 
+                                       'https://graph.microsoft.com/.default')
     
     if graph_token:
-        print("   ✅ Graph token obtained")
-        if test_graph_access(graph_token):
-            print("   🎉 GRAPH API SUCCESS - Using this method!")
-            return create_final_uploader_script("graph", graph_token, client_id, tenant_id, client_secret)
-    else:
-        print("   ❌ Graph token failed")
+        analyze_token(graph_token, "Microsoft Graph")
     
-    # Method 2: SharePoint-specific scope
-    print("\n2️⃣ SharePoint-Specific Scope")
-    sp_token = get_token(tenant_id, client_id, client_secret, 'https://jeanalytics.sharepoint.com/.default')
+    # Test 2: Direct Site URL Variations
+    print("\n2️⃣ SITE URL VARIATIONS TEST")
+    print("-" * 30)
     
-    if sp_token:
-        print("   ✅ SharePoint token obtained")
-        if test_sharepoint_rest(sp_token, site_url):
-            print("   🎉 SHAREPOINT REST SUCCESS - Using this method!")
-            return create_final_uploader_script("sharepoint", sp_token, client_id, tenant_id, client_secret)
-    else:
-        print("   ❌ SharePoint token failed")
+    if graph_token:
+        test_site_url_variations(graph_token)
     
-    # Method 3: Legacy SharePoint authentication
-    print("\n3️⃣ Legacy SharePoint Authentication")
-    legacy_token = get_legacy_token(tenant_id, client_id, client_secret)
+    # Test 3: Tenant Settings Check
+    print("\n3️⃣ TENANT SETTINGS CHECK")
+    print("-" * 30)
     
-    if legacy_token:
-        print("   ✅ Legacy token obtained")
-        if test_sharepoint_rest(legacy_token, site_url):
-            print("   🎉 LEGACY AUTH SUCCESS - Using this method!")
-            return create_final_uploader_script("legacy", legacy_token, client_id, tenant_id, client_secret)
-    else:
-        print("   ❌ Legacy token failed")
+    if graph_token:
+        check_tenant_settings(graph_token)
     
-    print("\n❌ All authentication methods failed")
-    print_troubleshooting_steps()
-    return False
+    # Test 4: Alternative Authentication
+    print("\n4️⃣ ALTERNATIVE AUTHENTICATION")
+    print("-" * 30)
+    
+    test_certificate_auth(tenant_id, client_id)
+    
+    # Test 5: Direct API Calls with Different Headers
+    print("\n5️⃣ HEADER VARIATIONS TEST")
+    print("-" * 30)
+    
+    if graph_token:
+        test_header_variations(graph_token)
+    
+    print("\n" + "=" * 60)
+    print("🎯 DIAGNOSTIC SUMMARY")
+    print("=" * 60)
+    print("Based on the diagnostics above, the likely causes are:")
+    print("1. SharePoint tenant blocks app-only tokens")
+    print("2. Site collection requires specific app registration")
+    print("3. Additional consent required at tenant level")
+    print("4. SharePoint Online Management Shell permission needed")
+    
+    # Provide next steps
+    provide_next_steps()
 
-def get_token(tenant_id, client_id, client_secret, scope):
-    """Get access token for given scope"""
+def get_token_with_details(tenant_id, client_id, client_secret, scope):
+    """Get token with detailed error information"""
+    print(f"🔑 Getting token for scope: {scope}")
+    
     token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
     
     token_data = {
@@ -96,190 +94,214 @@ def get_token(tenant_id, client_id, client_secret, scope):
     try:
         response = requests.post(token_url, data=token_data)
         if response.status_code == 200:
-            return response.json().get('access_token')
+            token_info = response.json()
+            access_token = token_info.get('access_token')
+            expires_in = token_info.get('expires_in', 'Unknown')
+            
+            print(f"   ✅ Token obtained successfully")
+            print(f"   ✅ Expires in: {expires_in} seconds")
+            
+            return access_token
         else:
-            print(f"   Token failed: {response.status_code} - {response.text}")
+            print(f"   ❌ Token failed: {response.status_code}")
+            print(f"   Error: {response.text}")
             return None
     except Exception as e:
-        print(f"   Token exception: {e}")
+        print(f"   ❌ Token exception: {e}")
         return None
 
-def get_legacy_token(tenant_id, client_id, client_secret):
-    """Try legacy SharePoint authentication"""
-    legacy_url = f"https://accounts.accesscontrol.windows.net/{tenant_id}/tokens/OAuth/2"
-    
-    # SharePoint resource format
-    resource = f"00000003-0000-0ff1-ce00-000000000000/jeanalytics.sharepoint.com@{tenant_id}"
-    client_full = f"{client_id}@{tenant_id}"
-    
-    token_data = {
-        'grant_type': 'client_credentials',
-        'client_id': client_full,
-        'client_secret': client_secret,
-        'resource': resource
-    }
+def analyze_token(token, token_type):
+    """Analyze JWT token contents"""
+    print(f"🔍 Analyzing {token_type} token...")
     
     try:
-        response = requests.post(legacy_url, data=token_data)
-        if response.status_code == 200:
-            return response.json().get('access_token')
+        # JWT tokens have 3 parts: header.payload.signature
+        parts = token.split('.')
+        if len(parts) >= 2:
+            # Decode payload (add padding if needed)
+            payload = parts[1]
+            payload += '=' * (4 - len(payload) % 4)  # Add padding
+            decoded = base64.b64decode(payload)
+            token_data = json.loads(decoded)
+            
+            print(f"   ✅ Token decoded successfully")
+            print(f"   App ID: {token_data.get('appid', 'Not found')}")
+            print(f"   Tenant: {token_data.get('tid', 'Not found')}")
+            print(f"   Audience: {token_data.get('aud', 'Not found')}")
+            
+            # Check roles/scopes
+            roles = token_data.get('roles', [])
+            scopes = token_data.get('scp', '')
+            
+            if roles:
+                print(f"   Roles: {', '.join(roles)}")
+            if scopes:
+                print(f"   Scopes: {scopes}")
+                
         else:
-            return None
-    except:
-        return None
+            print("   ❌ Invalid JWT token format")
+            
+    except Exception as e:
+        print(f"   ❌ Token analysis failed: {e}")
 
-def test_graph_access(token):
-    """Test Microsoft Graph API access"""
+def test_site_url_variations(token):
+    """Test different ways to access the site"""
+    
     headers = {
         'Authorization': f'Bearer {token}',
         'Content-Type': 'application/json'
     }
     
-    # Test site access
-    site_urls = [
+    # Different URL formats to try
+    url_variations = [
         "https://graph.microsoft.com/v1.0/sites/jeanalytics.sharepoint.com:/sites/LSTM",
-        "https://graph.microsoft.com/v1.0/sites/jeanalytics.sharepoint.com/sites/LSTM"
+        "https://graph.microsoft.com/v1.0/sites/jeanalytics.sharepoint.com/sites/LSTM",
+        "https://graph.microsoft.com/v1.0/sites?search=LSTM",
+        "https://graph.microsoft.com/v1.0/sites/root/sites",
+        "https://graph.microsoft.com/v1.0/sites/jeanalytics.sharepoint.com",
+        "https://graph.microsoft.com/beta/sites/jeanalytics.sharepoint.com:/sites/LSTM"
     ]
     
-    for site_url in site_urls:
+    for i, url in enumerate(url_variations, 1):
+        print(f"   Testing variation {i}: {url}")
         try:
-            response = requests.get(site_url, headers=headers)
+            response = requests.get(url, headers=headers)
+            print(f"      Status: {response.status_code}")
+            
             if response.status_code == 200:
-                site_data = response.json()
-                site_name = site_data.get('displayName', 'Unknown')
-                site_id = site_data.get('id')
-                
-                print(f"   ✅ Site access: {site_name}")
-                print(f"   ✅ Site ID: {site_id}")
-                
-                # Test drive access
-                drive_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive"
-                drive_response = requests.get(drive_url, headers=headers)
-                
-                if drive_response.status_code == 200:
-                    drive_data = drive_response.json()
-                    drive_name = drive_data.get('name', 'Documents')
-                    print(f"   ✅ Drive access: {drive_name}")
-                    
-                    # Test file upload capability
-                    return test_upload_capability(token, site_id)
-                else:
-                    print(f"   ❌ Drive access failed: {drive_response.status_code}")
-                    return False
+                data = response.json()
+                if 'value' in data:  # List of sites
+                    print(f"      Found {len(data['value'])} sites")
+                    for site in data['value'][:3]:  # Show first 3
+                        print(f"         - {site.get('displayName', 'No name')}")
+                elif 'displayName' in data:  # Single site
+                    print(f"      Site: {data.get('displayName')}")
+                    print(f"      ✅ SUCCESS! Site accessible")
+                    return data
+            elif response.status_code == 401:
+                print(f"      ❌ Unauthorized")
+            elif response.status_code == 403:
+                print(f"      ❌ Forbidden")
             else:
-                print(f"   ❌ Site access failed: {response.status_code}")
+                print(f"      Response: {response.text[:100]}...")
+                
         except Exception as e:
-            print(f"   ❌ Graph test exception: {e}")
+            print(f"      ❌ Exception: {e}")
+    
+    return None
+
+def check_tenant_settings(token):
+    """Check tenant-level settings that might block app access"""
+    
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json'
+    }
+    
+    # Try to access organization info
+    org_url = "https://graph.microsoft.com/v1.0/organization"
+    
+    try:
+        response = requests.get(org_url, headers=headers)
+        if response.status_code == 200:
+            org_data = response.json()
+            if 'value' in org_data and org_data['value']:
+                org = org_data['value'][0]
+                print(f"   ✅ Organization: {org.get('displayName', 'Unknown')}")
+                print(f"   Tenant ID: {org.get('id', 'Unknown')}")
+            else:
+                print("   ❌ No organization data returned")
+        else:
+            print(f"   ❌ Organization check failed: {response.status_code}")
+    except Exception as e:
+        print(f"   ❌ Tenant check exception: {e}")
+
+def test_certificate_auth(tenant_id, client_id):
+    """Test if certificate authentication is required"""
+    print("   Certificate authentication is an alternative method")
+    print("   This would require uploading a certificate to Azure AD")
+    print("   Skipping for now - use client secret method first")
+
+def test_header_variations(token):
+    """Test different header combinations"""
+    
+    base_url = "https://graph.microsoft.com/v1.0/sites/jeanalytics.sharepoint.com"
+    
+    header_variations = [
+        {
+            'name': 'Standard Headers',
+            'headers': {
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json'
+            }
+        },
+        {
+            'name': 'With Accept Header',
+            'headers': {
+                'Authorization': f'Bearer {token}',
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            }
+        },
+        {
+            'name': 'SharePoint Specific',
+            'headers': {
+                'Authorization': f'Bearer {token}',
+                'Accept': 'application/json;odata=verbose',
+                'Content-Type': 'application/json;odata=verbose'
+            }
+        }
+    ]
+    
+    for variation in header_variations:
+        print(f"   Testing: {variation['name']}")
+        try:
+            response = requests.get(base_url, headers=variation['headers'])
+            print(f"      Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                print(f"      ✅ SUCCESS with {variation['name']}!")
+                return True
+            elif response.status_code == 401:
+                error_text = response.text
+                if "app only tokens" in error_text.lower():
+                    print(f"      ❌ App-only tokens explicitly blocked")
+                else:
+                    print(f"      ❌ Unauthorized: {error_text[:100]}...")
+                    
+        except Exception as e:
+            print(f"      ❌ Exception: {e}")
     
     return False
 
-def test_upload_capability(token, site_id):
-    """Test if we can upload files"""
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json'
-    }
-    
-    # Test root folder access
-    root_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root/children"
-    
-    try:
-        response = requests.get(root_url, headers=headers)
-        if response.status_code == 200:
-            print(f"   ✅ File upload capability confirmed")
-            return True
-        else:
-            print(f"   ❌ Upload test failed: {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"   ❌ Upload test exception: {e}")
-        return False
-
-def test_sharepoint_rest(token, site_url):
-    """Test SharePoint REST API"""
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'Accept': 'application/json;odata=verbose'
-    }
-    
-    test_url = f"{site_url}/_api/web"
-    
-    try:
-        response = requests.get(test_url, headers=headers)
-        if response.status_code == 200:
-            site_data = response.json()
-            site_title = site_data.get('d', {}).get('Title', 'Unknown')
-            print(f"   ✅ REST API access: {site_title}")
-            return True
-        else:
-            print(f"   ❌ REST API failed: {response.status_code}")
-            if "Unsupported app only token" in response.text:
-                print("   ⚠️  App-only tokens still blocked via REST API")
-            return False
-    except Exception as e:
-        print(f"   ❌ REST API exception: {e}")
-        return False
-
-def create_final_uploader_script(method, token, client_id, tenant_id, client_secret):
-    """Create instructions for the working method"""
-    print("\n" + "=" * 65)
-    print("🎉 AUTHENTICATION SUCCESS!")
-    print(f"✅ Working method: {method.upper()}")
-    print("=" * 65)
-    
-    if method == "graph":
-        print("📝 READY FOR FILE UPLOAD!")
-        print("   Your app can use Microsoft Graph API")
-        print("   Scope: https://graph.microsoft.com/.default")
-        print("   Method: Graph API file upload")
-    elif method == "sharepoint":
-        print("📝 READY FOR FILE UPLOAD!")
-        print("   Your app can use SharePoint REST API")
-        print("   Scope: https://jeanalytics.sharepoint.com/.default")
-        print("   Method: SharePoint REST API file upload")
-    elif method == "legacy":
-        print("📝 READY FOR FILE UPLOAD!")
-        print("   Your app can use Legacy SharePoint auth")
-        print("   Method: Legacy SharePoint authentication")
-    
-    print("\n🚀 NEXT STEP:")
-    print("   I'll create the final CSV upload script using this working method")
-    print("   Your app registration is properly configured!")
-    
-    return True
-
-def print_troubleshooting_steps():
-    """Print troubleshooting information"""
-    print("\n🔧 TROUBLESHOOTING STEPS:")
-    print("=" * 45)
-    print("1. Check Azure App Registration:")
-    print("   - Go to portal.azure.com → App registrations")
-    print("   - Find 'LSTM-SharePoint-Uploader'")
-    print("   - API permissions → Sites.ReadWrite.All should have green checkmark")
+def provide_next_steps():
+    """Provide actionable next steps based on diagnostics"""
+    print("\n🚀 RECOMMENDED NEXT STEPS:")
+    print("-" * 40)
     print()
-    print("2. Check SharePoint Site Collection:")
-    print("   - Verify the app appears in Site Collection App Permissions")
-    print("   - App should have proper permission level")
+    
+    print("Option A - SharePoint Admin Settings:")
+    print("1. Contact your SharePoint administrator")
+    print("2. Ask them to enable 'App-Only Authentication' for your tenant")
+    print("3. This is typically found in SharePoint Admin Center")
     print()
-    print("3. Wait for propagation:")
-    print("   - Permissions can take 5-15 minutes to propagate")
-    print("   - Try running the test again in a few minutes")
+    
+    print("Option B - Use Delegated Permissions:")
+    print("1. Switch from Application to Delegated permissions")
+    print("2. Use interactive login instead of client credentials")
+    print("3. This requires user interaction but bypasses app-only restrictions")
     print()
-    print("4. Contact SharePoint admin:")
-    print("   - They may need to enable app-only authentication")
-    print("   - Or grant additional permissions to your app")
+    
+    print("Option C - Service Account Approach:")
+    print("1. Create a dedicated service account")
+    print("2. Grant it SharePoint permissions")
+    print("3. Use username/password authentication")
+    print()
+    
+    print("Option D - PowerShell/CLI Alternative:")
+    print("1. Use SharePoint Online Management Shell")
+    print("2. Or Microsoft 365 CLI with different authentication")
+    print("3. Upload files via PowerShell script")
 
 if __name__ == "__main__":
-    print("Testing SharePoint access with your registered app...")
-    print("App: LSTM-SharePoint-Uploader")
-    print("Client ID: 26a6a10b-5718-440c-8d1b-699fc88f7057")
-    print()
-    
-    success = test_sharepoint_with_your_config()
-    
-    if success:
-        print("\n✅ TEST COMPLETED SUCCESSFULLY!")
-        print("Ready to create the final upload script.")
-    else:
-        print("\n❌ TEST FAILED")
-        print("Please check the troubleshooting steps above.")
+    diagnose_sharepoint_issues()
