@@ -111,4 +111,5 @@ jobs:
         SHAREPOINT_FOLDER_PATH: ${{ secrets.SHAREPOINT_FOLDER_PATH }}
       run: |
         echo "Starting daily SharePoint upload..."
+        cd src
         python daily_sharepoint_uploader.py
