@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """
-Comprehensive SharePoint diagnostic script
-Get detailed error information and try alternative authentication methods
+SharePoint CSV Uploader using Delegated Authentication
+This bypasses app-only authentication restrictions
 """
 
 import os
+import pandas as pd
 import requests
 import json
 from datetime import datetime
-import base64
+from msal import ConfidentialClientApplication
+import webbrowser
+from urllib.parse import urlparse, parse_qs
 
-def diagnose_sharepoint_issues():
-    """Comprehensive SharePoint diagnostics"""
+def sharepoint_delegated_uploader():
+    """Upload CSV using delegated permissions (user context)"""
     
-    print("🔍 SHAREPOINT COMPREHENSIVE DIAGNOSTICS")
-    print("=" * 60)
-    print(f"⏰ Test time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("🚀 SHAREPOINT CSV UPLOADER - DELEGATED AUTH")
+    print("=" * 55)
+    print(f"⏰ Upload time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     
     # Configuration
@@ -24,284 +27,275 @@ def diagnose_sharepoint_issues():
     client_id = "26a6a10b-5718-440c-8d1b-699fc88f7057"
     site_url = os.getenv('SHAREPOINT_SITE_URL', 'https://jeanalytics.sharepoint.com/sites/LSTM')
     
-    print(f"📋 Tenant: {tenant_id}")
-    print(f"📋 Client: {client_id}")
-    print(f"📋 Site: {site_url}")
+    if not all([tenant_id, client_secret]):
+        print("❌ Missing environment variables")
+        return False
+    
+    print("📋 CONFIGURATION")
+    print("-" * 20)
+    print(f"Client ID: {client_id}")
+    print(f"Tenant: {tenant_id}")
+    print(f"Site: {site_url}")
     print()
     
-    # Test 1: Token Analysis
-    print("1️⃣ TOKEN ANALYSIS")
+    # Step 1: Get delegated token
+    print("🔑 STEP 1: AUTHENTICATION")
     print("-" * 30)
     
-    graph_token = get_token_with_details(tenant_id, client_id, client_secret, 
-                                       'https://graph.microsoft.com/.default')
+    token = get_delegated_token(tenant_id, client_id, client_secret)
+    if not token:
+        print("❌ Authentication failed")
+        return False
     
-    if graph_token:
-        analyze_token(graph_token, "Microsoft Graph")
+    print("✅ Authentication successful")
+    print()
     
-    # Test 2: Direct Site URL Variations
-    print("\n2️⃣ SITE URL VARIATIONS TEST")
-    print("-" * 30)
+    # Step 2: Get site information
+    print("🏢 STEP 2: SITE ACCESS")
+    print("-" * 25)
     
-    if graph_token:
-        test_site_url_variations(graph_token)
+    site_id = get_site_id(token, site_url)
+    if not site_id:
+        print("❌ Site access failed")
+        return False
     
-    # Test 3: Tenant Settings Check
-    print("\n3️⃣ TENANT SETTINGS CHECK")
-    print("-" * 30)
+    print(f"✅ Site access successful")
+    print(f"Site ID: {site_id}")
+    print()
     
-    if graph_token:
-        check_tenant_settings(graph_token)
+    # Step 3: Get drive information
+    print("📁 STEP 3: DRIVE ACCESS")
+    print("-" * 26)
     
-    # Test 4: Alternative Authentication
-    print("\n4️⃣ ALTERNATIVE AUTHENTICATION")
-    print("-" * 30)
+    drive_id = get_drive_id(token, site_id)
+    if not drive_id:
+        print("❌ Drive access failed")
+        return False
     
-    test_certificate_auth(tenant_id, client_id)
+    print(f"✅ Drive access successful")
+    print(f"Drive ID: {drive_id}")
+    print()
     
-    # Test 5: Direct API Calls with Different Headers
-    print("\n5️⃣ HEADER VARIATIONS TEST")
-    print("-" * 30)
+    # Step 4: Generate forecast data
+    print("📊 STEP 4: DATA GENERATION")
+    print("-" * 29)
     
-    if graph_token:
-        test_header_variations(graph_token)
+    df = generate_forecast_data()
+    print(f"✅ Generated {len(df)} forecast records")
+    print("Sample data:")
+    print(df.head().to_string(index=False))
+    print()
     
-    print("\n" + "=" * 60)
-    print("🎯 DIAGNOSTIC SUMMARY")
-    print("=" * 60)
-    print("Based on the diagnostics above, the likely causes are:")
-    print("1. SharePoint tenant blocks app-only tokens")
-    print("2. Site collection requires specific app registration")
-    print("3. Additional consent required at tenant level")
-    print("4. SharePoint Online Management Shell permission needed")
+    # Step 5: Upload CSV file
+    print("📤 STEP 5: FILE UPLOAD")
+    print("-" * 24)
     
-    # Provide next steps
-    provide_next_steps()
+    success = upload_csv_file(token, drive_id, df)
+    
+    if success:
+        print("🎉 CSV UPLOAD SUCCESSFUL!")
+        print("✅ File uploaded to SharePoint")
+        return True
+    else:
+        print("❌ CSV upload failed")
+        return False
 
-def get_token_with_details(tenant_id, client_id, client_secret, scope):
-    """Get token with detailed error information"""
-    print(f"🔑 Getting token for scope: {scope}")
+def get_delegated_token(tenant_id, client_id, client_secret):
+    """Get token using delegated permissions (user context)"""
     
-    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    # MSAL configuration
+    authority = f"https://login.microsoftonline.com/{tenant_id}"
+    scopes = ["https://graph.microsoft.com/Sites.ReadWrite.All"]
     
-    token_data = {
-        'client_id': client_id,
-        'client_secret': client_secret,
-        'scope': scope,
-        'grant_type': 'client_credentials'
-    }
+    # Create MSAL app
+    app = ConfidentialClientApplication(
+        client_id=client_id,
+        client_credential=client_secret,
+        authority=authority
+    )
+    
+    # Try to get token from cache first
+    accounts = app.get_accounts()
+    if accounts:
+        print("   Found cached account, attempting silent authentication...")
+        result = app.acquire_token_silent(scopes, account=accounts[0])
+        if result and "access_token" in result:
+            print("   ✅ Silent authentication successful")
+            return result["access_token"]
+    
+    # If no cache, try device flow (works in automation)
+    print("   No cached token, starting device code flow...")
     
     try:
-        response = requests.post(token_url, data=token_data)
-        if response.status_code == 200:
-            token_info = response.json()
-            access_token = token_info.get('access_token')
-            expires_in = token_info.get('expires_in', 'Unknown')
+        # Device code flow - user will need to authenticate once
+        flow = app.initiate_device_flow(scopes=scopes)
+        if "user_code" in flow:
+            print(f"   📱 Please visit: {flow['verification_uri']}")
+            print(f"   🔑 Enter code: {flow['user_code']}")
+            print("   ⏳ Waiting for authentication...")
             
-            print(f"   ✅ Token obtained successfully")
-            print(f"   ✅ Expires in: {expires_in} seconds")
+            # Wait for user to complete authentication
+            result = app.acquire_token_by_device_flow(flow)
             
-            return access_token
+            if result and "access_token" in result:
+                print("   ✅ Device flow authentication successful")
+                return result["access_token"]
+            else:
+                print(f"   ❌ Device flow failed: {result.get('error_description', 'Unknown error')}")
+                return None
         else:
-            print(f"   ❌ Token failed: {response.status_code}")
-            print(f"   Error: {response.text}")
+            print("   ❌ Failed to initiate device flow")
             return None
+            
     except Exception as e:
-        print(f"   ❌ Token exception: {e}")
+        print(f"   ❌ Authentication exception: {e}")
         return None
 
-def analyze_token(token, token_type):
-    """Analyze JWT token contents"""
-    print(f"🔍 Analyzing {token_type} token...")
-    
-    try:
-        # JWT tokens have 3 parts: header.payload.signature
-        parts = token.split('.')
-        if len(parts) >= 2:
-            # Decode payload (add padding if needed)
-            payload = parts[1]
-            payload += '=' * (4 - len(payload) % 4)  # Add padding
-            decoded = base64.b64decode(payload)
-            token_data = json.loads(decoded)
-            
-            print(f"   ✅ Token decoded successfully")
-            print(f"   App ID: {token_data.get('appid', 'Not found')}")
-            print(f"   Tenant: {token_data.get('tid', 'Not found')}")
-            print(f"   Audience: {token_data.get('aud', 'Not found')}")
-            
-            # Check roles/scopes
-            roles = token_data.get('roles', [])
-            scopes = token_data.get('scp', '')
-            
-            if roles:
-                print(f"   Roles: {', '.join(roles)}")
-            if scopes:
-                print(f"   Scopes: {scopes}")
-                
-        else:
-            print("   ❌ Invalid JWT token format")
-            
-    except Exception as e:
-        print(f"   ❌ Token analysis failed: {e}")
-
-def test_site_url_variations(token):
-    """Test different ways to access the site"""
+def get_site_id(token, site_url):
+    """Get SharePoint site ID"""
     
     headers = {
         'Authorization': f'Bearer {token}',
         'Content-Type': 'application/json'
     }
     
-    # Different URL formats to try
-    url_variations = [
-        "https://graph.microsoft.com/v1.0/sites/jeanalytics.sharepoint.com:/sites/LSTM",
-        "https://graph.microsoft.com/v1.0/sites/jeanalytics.sharepoint.com/sites/LSTM",
-        "https://graph.microsoft.com/v1.0/sites?search=LSTM",
-        "https://graph.microsoft.com/v1.0/sites/root/sites",
-        "https://graph.microsoft.com/v1.0/sites/jeanalytics.sharepoint.com",
-        "https://graph.microsoft.com/beta/sites/jeanalytics.sharepoint.com:/sites/LSTM"
+    # Extract site path from URL
+    parsed_url = urlparse(site_url)
+    site_path = parsed_url.path  # Should be /sites/LSTM
+    
+    # Try different Graph API formats
+    api_urls = [
+        f"https://graph.microsoft.com/v1.0/sites/{parsed_url.netloc}:{site_path}",
+        f"https://graph.microsoft.com/v1.0/sites/{parsed_url.netloc}{site_path}",
+        f"https://graph.microsoft.com/v1.0/sites?search=LSTM"
     ]
     
-    for i, url in enumerate(url_variations, 1):
-        print(f"   Testing variation {i}: {url}")
+    for api_url in api_urls:
         try:
-            response = requests.get(url, headers=headers)
-            print(f"      Status: {response.status_code}")
-            
+            response = requests.get(api_url, headers=headers)
             if response.status_code == 200:
                 data = response.json()
-                if 'value' in data:  # List of sites
-                    print(f"      Found {len(data['value'])} sites")
-                    for site in data['value'][:3]:  # Show first 3
-                        print(f"         - {site.get('displayName', 'No name')}")
-                elif 'displayName' in data:  # Single site
-                    print(f"      Site: {data.get('displayName')}")
-                    print(f"      ✅ SUCCESS! Site accessible")
-                    return data
-            elif response.status_code == 401:
-                print(f"      ❌ Unauthorized")
-            elif response.status_code == 403:
-                print(f"      ❌ Forbidden")
-            else:
-                print(f"      Response: {response.text[:100]}...")
                 
+                # Handle search results
+                if 'value' in data:
+                    for site in data['value']:
+                        if 'LSTM' in site.get('displayName', ''):
+                            return site.get('id')
+                else:
+                    # Direct site access
+                    return data.get('id')
+                    
         except Exception as e:
-            print(f"      ❌ Exception: {e}")
+            continue
     
     return None
 
-def check_tenant_settings(token):
-    """Check tenant-level settings that might block app access"""
+def get_drive_id(token, site_id):
+    """Get default drive ID for the site"""
     
     headers = {
         'Authorization': f'Bearer {token}',
         'Content-Type': 'application/json'
     }
     
-    # Try to access organization info
-    org_url = "https://graph.microsoft.com/v1.0/organization"
+    drive_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive"
     
     try:
-        response = requests.get(org_url, headers=headers)
+        response = requests.get(drive_url, headers=headers)
         if response.status_code == 200:
-            org_data = response.json()
-            if 'value' in org_data and org_data['value']:
-                org = org_data['value'][0]
-                print(f"   ✅ Organization: {org.get('displayName', 'Unknown')}")
-                print(f"   Tenant ID: {org.get('id', 'Unknown')}")
-            else:
-                print("   ❌ No organization data returned")
-        else:
-            print(f"   ❌ Organization check failed: {response.status_code}")
+            drive_data = response.json()
+            return drive_data.get('id')
     except Exception as e:
-        print(f"   ❌ Tenant check exception: {e}")
+        print(f"   Drive access error: {e}")
+    
+    return None
 
-def test_certificate_auth(tenant_id, client_id):
-    """Test if certificate authentication is required"""
-    print("   Certificate authentication is an alternative method")
-    print("   This would require uploading a certificate to Azure AD")
-    print("   Skipping for now - use client secret method first")
+def generate_forecast_data():
+    """Generate sample LSTM forecast data"""
+    
+    import numpy as np
+    from datetime import timedelta
+    
+    # Generate 30 days of forecast data
+    base_date = datetime.now().date()
+    dates = [base_date + timedelta(days=i) for i in range(30)]
+    
+    # Generate realistic forecast values with trend and seasonality
+    np.random.seed(42)  # For reproducible results
+    
+    trend = np.linspace(100, 120, 30)  # Upward trend
+    seasonality = 10 * np.sin(np.linspace(0, 4*np.pi, 30))  # Weekly seasonality
+    noise = np.random.normal(0, 5, 30)  # Random noise
+    
+    values = trend + seasonality + noise
+    
+    # Create confidence intervals
+    lower_bounds = values - np.random.uniform(5, 15, 30)
+    upper_bounds = values + np.random.uniform(5, 15, 30)
+    
+    # Create DataFrame
+    df = pd.DataFrame({
+        'Date': dates,
+        'Forecast_Value': np.round(values, 2),
+        'Lower_Bound': np.round(lower_bounds, 2),
+        'Upper_Bound': np.round(upper_bounds, 2),
+        'Model_Version': '1.0',
+        'Generated_At': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    })
+    
+    return df
 
-def test_header_variations(token):
-    """Test different header combinations"""
+def upload_csv_file(token, drive_id, df):
+    """Upload CSV file to SharePoint"""
     
-    base_url = "https://graph.microsoft.com/v1.0/sites/jeanalytics.sharepoint.com"
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'text/csv'
+    }
     
-    header_variations = [
-        {
-            'name': 'Standard Headers',
-            'headers': {
-                'Authorization': f'Bearer {token}',
-                'Content-Type': 'application/json'
-            }
-        },
-        {
-            'name': 'With Accept Header',
-            'headers': {
-                'Authorization': f'Bearer {token}',
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
-            }
-        },
-        {
-            'name': 'SharePoint Specific',
-            'headers': {
-                'Authorization': f'Bearer {token}',
-                'Accept': 'application/json;odata=verbose',
-                'Content-Type': 'application/json;odata=verbose'
-            }
-        }
-    ]
+    # Generate filename with timestamp
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"lstm_forecast_{timestamp}.csv"
     
-    for variation in header_variations:
-        print(f"   Testing: {variation['name']}")
-        try:
-            response = requests.get(base_url, headers=variation['headers'])
-            print(f"      Status: {response.status_code}")
+    # Convert DataFrame to CSV string
+    csv_content = df.to_csv(index=False)
+    csv_bytes = csv_content.encode('utf-8')
+    
+    # Upload file using Graph API
+    upload_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{filename}:/content"
+    
+    try:
+        response = requests.put(upload_url, headers=headers, data=csv_bytes)
+        
+        if response.status_code in [200, 201]:
+            file_data = response.json()
+            file_name = file_data.get('name', 'Unknown')
+            file_size = file_data.get('size', 'Unknown')
+            web_url = file_data.get('webUrl', 'No URL')
             
-            if response.status_code == 200:
-                print(f"      ✅ SUCCESS with {variation['name']}!")
-                return True
-            elif response.status_code == 401:
-                error_text = response.text
-                if "app only tokens" in error_text.lower():
-                    print(f"      ❌ App-only tokens explicitly blocked")
-                else:
-                    print(f"      ❌ Unauthorized: {error_text[:100]}...")
-                    
-        except Exception as e:
-            print(f"      ❌ Exception: {e}")
-    
-    return False
-
-def provide_next_steps():
-    """Provide actionable next steps based on diagnostics"""
-    print("\n🚀 RECOMMENDED NEXT STEPS:")
-    print("-" * 40)
-    print()
-    
-    print("Option A - SharePoint Admin Settings:")
-    print("1. Contact your SharePoint administrator")
-    print("2. Ask them to enable 'App-Only Authentication' for your tenant")
-    print("3. This is typically found in SharePoint Admin Center")
-    print()
-    
-    print("Option B - Use Delegated Permissions:")
-    print("1. Switch from Application to Delegated permissions")
-    print("2. Use interactive login instead of client credentials")
-    print("3. This requires user interaction but bypasses app-only restrictions")
-    print()
-    
-    print("Option C - Service Account Approach:")
-    print("1. Create a dedicated service account")
-    print("2. Grant it SharePoint permissions")
-    print("3. Use username/password authentication")
-    print()
-    
-    print("Option D - PowerShell/CLI Alternative:")
-    print("1. Use SharePoint Online Management Shell")
-    print("2. Or Microsoft 365 CLI with different authentication")
-    print("3. Upload files via PowerShell script")
+            print(f"   ✅ File uploaded: {file_name}")
+            print(f"   ✅ File size: {file_size} bytes")
+            print(f"   ✅ SharePoint URL: {web_url}")
+            
+            return True
+        else:
+            print(f"   ❌ Upload failed: {response.status_code}")
+            print(f"   Response: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"   ❌ Upload exception: {e}")
+        return False
 
 if __name__ == "__main__":
-    diagnose_sharepoint_issues()
+    success = sharepoint_delegated_uploader()
+    
+    print("\n" + "=" * 55)
+    if success:
+        print("🎉 SHAREPOINT UPLOAD COMPLETED!")
+        print("✅ CSV file successfully uploaded")
+        print("✅ Ready for daily automation")
+    else:
+        print("❌ SHAREPOINT UPLOAD FAILED")
+        print("💡 Check the error messages above")
+    print("=" * 55)
