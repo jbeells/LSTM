@@ -83,16 +83,38 @@ jobs:
       if: success()
       run: |
         echo "Checking forecast outputs..."
-        echo "Files in data/upload:"
-        ls -la data/upload/ || echo "No data/upload directory"
         
-        echo "Checking for actual output files:"
-        for file in data/upload/*.csv; do
-          if [ -f "$file" ]; then
-            basename_file=$(basename "$file")
-            echo "Found: $basename_file ($(wc -l < "$file") lines)"
-          fi
-        done
+        if [ -f data/upload/actuals.csv ]; then
+          echo "✓ Actuals data saved"
+          echo "Rows in actuals.csv: $(wc -l < data/upload/actuals.csv)"
+        else
+          echo "✗ Actuals data missing"
+        fi
+        
+        if [ -f data/upload/predicts.csv ]; then
+          echo "✓ Predictions data saved"
+          echo "Rows in predicts.csv: $(wc -l < data/upload/predicts.csv)"
+        else
+          echo "✗ Predictions data missing"
+        fi
+        
+        if [ -f data/upload/forecasts.csv ]; then
+          echo "✓ Forecast data saved"
+          echo "Rows in forecasts.csv: $(wc -l < data/upload/forecasts.csv)"
+        else
+          echo "✗ Forecast data missing"
+        fi
+        
+        if [ -f data/upload/model_metrics.csv ]; then
+          echo "✓ Model metrics saved"
+          echo "Metrics content:"
+          head -n 3 data/upload/model_metrics.csv
+        else
+          echo "✗ Model metrics missing"
+        fi
+        
+        echo "All files in data/upload:"
+        ls -la data/upload/
     
     - name: Upload CSV files to SharePoint
       if: success()
