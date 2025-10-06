@@ -1,0 +1,115 @@
+
+name: Daily LSTM Forecast
+
+on:
+  schedule:
+    - cron: '30 14 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Force run even if market is closed'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TZ: America/New_York
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run daily forecast with debug
+      env:
+        FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+        EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
+        NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+        PROJECT_ROOT: ${{ github.workspace }}
+        PYTHONPATH: ${{ github.workspace }}/src
+        FORCE_RUN: ${{ github.event.inputs.force_run || 'false' }}
+      run: |
+        echo "=== RUNNING DAILY FORECAST WITH DEBUG ==="
+        python src/daily_forecast.py
+        echo "=== FORECAST SCRIPT COMPLETED ==="
+        echo "Exit code: $?"
+
+    - name: Check what files were created
+      if: always()
+      run: |
+        echo "=== CHECKING ALL OUTPUT FILES ==="
+        echo "Contents of data/upload/:"
+        ls -la data/upload/ 2>/dev/null || echo "No data/upload directory found"
+
+        echo "Contents of logs/:"
+        ls -la logs/ 2>/dev/null || echo "No logs directory found"
+
+        echo "=== CHECKING EACH EXPECTED FILE ==="
+        for file in actuals.csv predicts.csv forecasts.csv model_metrics.csv; do
+          if [ -f "data/upload/$file" ]; then
+            echo "✓ Found: $file ($(wc -l < data/upload/$file) lines)"
+            echo "  First few lines:"
+            head -3 "data/upload/$file"
+            echo ""
+          else
+            echo "✗ Missing: $file"
+          fi
+        done
+
+    - name: Show recent log output
+      if: always()
+      run: |
+        echo "=== RECENT LOG OUTPUT ==="
+        if [ -d logs ]; then
+          latest_log=$(ls -t logs/daily_forecast_*.log 2>/dev/null | head -1)
+          if [ -n "$latest_log" ]; then
+            echo "Latest log file: $latest_log"
+            echo "Last 50 lines of log:"
+            tail -50 "$latest_log"
+          else
+            echo "No daily forecast log files found"
+          fi
+        else
+          echo "No logs directory found"
+        fi
+
+    - name: Upload all results for debugging
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: debug-results-${{ github.run_number }}
+        path: |
+          data/upload/*.csv
+          logs/*.log
+        retention-days: 7
+
+    - name: Upload CSV files to Azure Blob Storage
+      if: success()
+      env:
+        AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        AZURE_CONTAINER_NAME: ${{ secrets.AZURE_CONTAINER_NAME }}
+      run: |
+        echo "Starting daily Azure Blob Storage upload..."
+        python src/daily_blob_uploader.py
